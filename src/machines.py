@@ -72,8 +72,11 @@ class RemoteMachine(GObject.Object):
         self.set_remote_status(RemoteStatus.INIT_CONNECTING)
 
         def keep_channel():
-            with grpc.insecure_channel("%s:%d" % (self.ip_address, self.port)) as channel:
+            creds = None
+            with open('/home/mtwebster/.ssh/id_rsa.pub', 'rb') as f:
+                creds = grpc.ssl_channel_credentials(f.read())
 
+            with grpc.secure_channel("%s:%d" % (self.ip_address, self.port), creds) as channel:
                 future = grpc.channel_ready_future(channel)
 
                 connect_retries = 0
@@ -493,7 +496,16 @@ class LocalMachine(warp_pb2_grpc.WarpServicer, GObject.Object):
         self.server = grpc.server(futures.ThreadPoolExecutor(max_workers=10), options=None)
         warp_pb2_grpc.add_WarpServicer_to_server(self, self.server)
 
-        self.server.add_insecure_port('[::]:%d' % prefs.get_port())
+
+        with open('/home/mtwebster/.ssh/id_rsa', 'rb') as f:
+            private_key = f.read()
+        with open('/home/mtwebster/.ssh/id_rsa.pub', 'rb') as f:
+            certificate_chain = f.read()
+
+        server_credentials = grpc.ssl_server_credentials(
+            ((private_key, certificate_chain,),))
+
+        self.server.add_secure_port('[::]:%d' % prefs.get_port(), server_credentials)
         self.server.start()
 
         self.emit_server_started()
