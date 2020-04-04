@@ -76,11 +76,8 @@ class RemoteMachine(GObject.Object):
         def keep_channel():
             creds = None
 
+            print(self.hostname)
             cert = self.authenticator.load_cert(self.hostname)
-
-            if creds == None:
-                self.authenticator.create_new_for_local()
-                cert = self.authenticator.load_cert(self.hostname)
 
             creds = grpc.ssl_channel_credentials(cert)
 

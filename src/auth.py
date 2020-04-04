@@ -24,8 +24,7 @@ class Authentication(GObject.Object):
         self.hostname = util.get_hostname()
 
     def load_cert(self, hostname):
-        path = os.path.join(CERT_FOLDER, self.hostname + ".pem")
-
+        path = os.path.join(CERT_FOLDER, hostname + ".pem")
         return self.load_bytes(path)
 
     def load_private_key(self):
