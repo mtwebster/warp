@@ -23,6 +23,7 @@ meson.add_install_script(
 
 libexec_py = [
   config_py,
+  'auth.py',
   'ops.py',
   'machines.py',
   'notifications.py',

@@ -12,6 +12,7 @@ import grpc
 import warp_pb2
 import warp_pb2_grpc
 
+import auth
 import prefs
 import util
 import transfers
@@ -37,12 +38,13 @@ class RemoteMachine(GObject.Object):
         'remote-status-changed': (GObject.SignalFlags.RUN_LAST, None, ())
     }
 
-    def __init__(self, name, hostname, ip, port, local_service_name):
+    def __init__(self, name, hostname, ip, port, local_service_name, authenticator):
         GObject.Object.__init__(self)
         self.ip_address = ip
         self.port = port
         self.connect_name = name
         self.hostname = hostname
+        self.authenticator = authenticator
         self.user_name = ""
         self.display_name = ""
         self.favorite = prefs.get_is_favorite(self.hostname)
@@ -73,8 +75,14 @@ class RemoteMachine(GObject.Object):
 
         def keep_channel():
             creds = None
-            with open('/home/mtwebster/.ssh/id_rsa.pub', 'rb') as f:
-                creds = grpc.ssl_channel_credentials(f.read())
+
+            cert = self.authenticator.load_cert(self.hostname)
+
+            if creds == None:
+                self.authenticator.create_new_for_local()
+                cert = self.authenticator.load_cert(self.hostname)
+
+            creds = grpc.ssl_channel_credentials(cert)
 
             with grpc.secure_channel("%s:%d" % (self.ip_address, self.port), creds) as channel:
                 future = grpc.channel_ready_future(channel)
@@ -419,6 +427,8 @@ class LocalMachine(warp_pb2_grpc.WarpServicer, GObject.Object):
         self.remote_machines = {}
         self.server_runlock = threading.Condition()
 
+        self.authenticator = auth.Authentication()
+
         self.browser = None
         self.zeroconf = None
         self.zeroconf = None
@@ -472,7 +482,13 @@ class LocalMachine(warp_pb2_grpc.WarpServicer, GObject.Object):
                 machine = self.remote_machines[name]
                 machine.port = info.port
             except KeyError:
-                machine = RemoteMachine(name, remote_hostname, remote_ip, info.port, self.service_name)
+                machine = RemoteMachine(name,
+                                        remote_hostname,
+                                        remote_ip,
+                                        info.port,
+                                        self.service_name,
+                                        self.authenticator)
+
                 self.remote_machines[name] = machine
                 machine.connect("ops-changed", self.remote_ops_changed)
                 self.emit_remote_machine_added(machine)
@@ -491,19 +507,29 @@ class LocalMachine(warp_pb2_grpc.WarpServicer, GObject.Object):
     def remote_ops_changed(self, remote_machine):
         self.emit("remote-machine-ops-changed", remote_machine.connect_name)
 
+    def get_key_strings(self):
+        cert = auth.load_cert(util.get_hostname())
+        key = auth.load_private_key()
+
+        return key, cert
+
     @util._async
     def start_server(self):
         self.server = grpc.server(futures.ThreadPoolExecutor(max_workers=10), options=None)
         warp_pb2_grpc.add_WarpServicer_to_server(self, self.server)
 
+        def get_key_and_cert():
+            key = self.authenticator.load_private_key()
+            cert = self.authenticator.load_cert(util.get_hostname())
+            return key, cert
 
-        with open('/home/mtwebster/.ssh/id_rsa', 'rb') as f:
-            private_key = f.read()
-        with open('/home/mtwebster/.ssh/id_rsa.pub', 'rb') as f:
-            certificate_chain = f.read()
+        key, cert = get_key_and_cert()
 
-        server_credentials = grpc.ssl_server_credentials(
-            ((private_key, certificate_chain,),))
+        if cert == None or key == None:
+            self.authenticator.create_new_for_local()
+            key, cert = get_key_and_cert()
+
+        server_credentials = grpc.ssl_server_credentials(((key, cert),))
 
         self.server.add_secure_port('[::]:%d' % prefs.get_port(), server_credentials)
         self.server.start()

@@ -29,7 +29,9 @@ gettext.bindtextdomain(config.PACKAGE, config.localedir)
 gettext.textdomain(config.PACKAGE)
 _ = gettext.gettext
 
-setproctitle.setproctitle("warp")
+
+# GLib.set_prgname("warp")
+# setproctitle.setproctitle("warp")
 
 SERVER_START_TIMEOUT = 3
 DISCOVERY_TIMEOUT = 3
@@ -948,6 +950,7 @@ class WarpApplication(Gtk.Application):
     def do_startup(self):
         Gtk.Application.do_startup(self)
         print("Initializing Warp\n")
+        GLib.set_prgname("warp")
 
         prefs.prefs_settings.connect("changed", self.on_prefs_changed)
 
