@@ -16,7 +16,8 @@ service Warp {
     rpc StopTransfer(StopInfo) returns (VoidType) {}
 
     rpc Ping(VoidType) returns (VoidType) {}
-    // rpc CanYouSeeMe(VoidType) returns (Visible) {}
+
+    rpc RequestServerCert(VoidType) returns (ServerCert) {}
 }
 
 message RemoteMachineInfo {
@@ -63,4 +64,8 @@ message FileChunk {
     int32 file_type = 2;
     string symlink_target = 3;
     bytes chunk = 4;
+}
+
+message ServerCert {
+    bytes box = 1;
 }

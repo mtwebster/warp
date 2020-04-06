@@ -1,10 +1,12 @@
+
 from cryptography import x509
 from cryptography.hazmat.primitives import serialization as crypto_serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.backends import default_backend as crypto_default_backend
 from cryptography.x509.oid import NameOID
-
+import nacl
+import hashlib
 import datetime
 import stat
 import os
@@ -16,12 +18,16 @@ import util
 day = datetime.timedelta(1, 0, 0)
 EXPIRE_TIME = 30 * day
 
-CERT_FOLDER = os.path.join(GLib.get_user_config_dir(), "warp", "remotes")
+DEFAULT_GROUP_CODE = b"Warpinator"
+CONFIG_FOLDER = os.path.join(GLib.get_user_config_dir(), "warp")
+CERT_FOLDER = os.path.join(CONFIG_FOLDER, "remotes")
+
 os.makedirs(CERT_FOLDER, 0o700, exist_ok=True)
 
-class Authentication(GObject.Object):
+class AuthManager(GObject.Object):
     def __init__(self):
         self.hostname = util.get_hostname()
+        self.get_server_creds()
 
     def load_cert(self, hostname):
         path = os.path.join(CERT_FOLDER, hostname + ".pem")
@@ -31,17 +37,6 @@ class Authentication(GObject.Object):
         path = os.path.join(CERT_FOLDER, self.hostname + "-key.pem")
 
         return self.load_bytes(path)
-
-    def load_bytes(self, path):
-        ret = None
-
-        try:
-            with open(path, "rb") as f:
-                ret = f.read()
-        except FileNotFoundError:
-            pass
-
-        return ret
 
     def save_cert(self, hostname, cert_bytes):
         path = os.path.join(CERT_FOLDER, self.hostname + ".pem")
@@ -72,6 +67,17 @@ class Authentication(GObject.Object):
 
         with os.fdopen(fdesc, 'wb') as f:
             f.write(file_bytes)
+
+    def load_bytes(self, path):
+        ret = None
+
+        try:
+            with open(path, "rb") as f:
+                ret = f.read()
+        except FileNotFoundError:
+            pass
+
+        return ret
 
     def make_key_cert_pair(self, hostname, ip):
         private_key = rsa.generate_private_key(
@@ -122,16 +128,104 @@ class Authentication(GObject.Object):
         self.save_private_key(key)
         self.save_cert(self.hostname, cert)
 
+    def lookup_single_by_oid(self, name_attrs, oid):
+        res = name_attrs.get_attributes_for_oid(oid)
+
+        if res and res[0]:
+            return res[0].value
+
+        return None
+
+    def ip_and_hostname_matches_certificate(self, ip, hostname, data):
+        cert_ip = None
+        backend = crypto_default_backend()
+        instance = x509.load_pem_x509_certificate(data, backend)
+
+        issuer = self.lookup_single_by_oid(instance.issuer, x509.NameOID.COMMON_NAME)
+        subject = self.lookup_single_by_oid(instance.subject, x509.NameOID.COMMON_NAME)
+
+        if issuer != subject:
+            return False
+
+        for ext in instance.extensions:
+            if isinstance(ext.value, x509.SubjectAlternativeName):
+                for item in ext.value:
+                    if isinstance(item, x509.DNSName):
+                        cert_ip = item.value
+
+        return issuer == hostname and cert_ip == ip
+
+    def get_server_creds(self):
+        key = self.load_private_key()
+        cert = self.load_cert(util.get_hostname())
+
+        if (key != None and cert != None) and self.ip_and_hostname_matches_certificate(self.hostname,
+                                                                                       util.get_ip(),
+                                                                                       cert):
+            print("Using existing server credentials")
+            return (key, cert)
+
+        print("Creating server credentials")
+        key, cert = self.make_key_cert_pair(self.hostname, util.get_ip())
+
+        try:
+            self.save_private_key(key)
+            self.save_cert(self.hostname, cert)
+        except OSError as e:
+            print("Unable to save new server key and/or certificate: %s" % e)
+
+        return (key, cert)
+
+    def get_boxed_server_cert(self):
+        hasher = hashlib.sha256()
+        m.update(self.get_group_code())
+        key = m.digest()
+
+        encoder = nacl.secret.SecretBox(key)
+        return encoder.encrypt(self.load_cert(self.hostname))
+
+    def unbox_server_cert(self, box):
+        hasher = hashlib.sha256()
+        m.update(self.get_group_code())
+        key = m.digest()
+
+        decoder = nacl.secret.SecretBox(key)
+
+        try:
+            cert = decoder.decrypt(box)
+        except nacl.exceptions.CryptoError:
+            # do something
+            return None
+
+        return cert
+
+    def get_group_code(self):
+        path = os.path.join(CONFIG_FOLDER, ".groupcode")
+
+        code = self.load_bytes(path)
+
+        if code == None:
+            code = DEFAULT_GROUP_CODE
+            self.save_group_code(code)
+
+        return code
+
+    def save_group_code(self, code):
+        path = os.path.join(CONFIG_FOLDER, ".groupcode")
+
+        self.save_bytes(code)
+
+    def validate_remote_creds(self, hostname, ip, box):
+        cert = self.unbox_server_cert(box)
+
+        if cert and self.ip_and_hostname_matches_certificate(cert):
+            print("matches")
+            self.save_cert(hostname, cert)
+            return True
+
+        return False
+
 if __name__ == "__main__":
-    a = Authentication()
+    a = AuthManager()
 
-    print("generating")
-    key, cert = a.make_key_cert_pair("mike-p51", "10.0.0.36")
-
-    print("saving")
-    a.save_remote_cert("mike-p51", cert)
-    a.save_remote_cert("mike-p51-priv", key)
-
-
-    print("loading")
-    a.load_remote_cert("mike-p51")
+    a.get_server_creds()

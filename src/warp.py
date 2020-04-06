@@ -14,7 +14,7 @@ from gi.repository import Gtk, GLib, XApp, Gio, GObject, Gdk
 import config
 import prefs
 import util
-import machines
+import server
 from ops import SendOp, ReceiveOp
 from util import TransferDirection, OpStatus, RemoteStatus
 
@@ -1012,8 +1012,8 @@ class WarpApplication(Gtk.Application):
     def start_server(self, restarting=False):
         self.window.start_startup_timer(restarting)
 
-        def ok_to_restart(server):
-            self.server = machines.LocalMachine()
+        def ok_to_restart():
+            self.server = server.Server()
             self.server.connect("server-started", self._server_started)
             self.server.connect("remote-machine-added", self._remote_added)
             self.server.connect("remote-machine-removed", self._remote_removed)
@@ -1027,7 +1027,7 @@ class WarpApplication(Gtk.Application):
             self.server.connect("shutdown-complete", ok_to_restart)
             self.server.shutdown()
         else:
-            ok_to_restart(None);
+            ok_to_restart();
 
     def shutdown(self, window=None):
         print("Beginning shutdown")
