@@ -95,14 +95,15 @@ class RemoteMachine(GObject.Object):
 
                 future = self.stub.RequestServerCert.future(void)
 
-                box = future.result()
+                box = future.result(2)
                 if self.authenticator.validate_remote_creds(self.hostname, self.ip_address, box):
                     channel.close()
                     cert = self.authenticator.load_cert(self.hostname)
                     return
 
         def run_secure_loop(cert):
-            creds = grpc.ssl_channel_credentials(cert)
+            creds = grpc.ssl_channel_credentials()
+            # creds = grpc.ssl_channel_credentials(cert)
 
             with grpc.secure_channel("%s:%d" % (self.ip_address, self.port), creds) as channel:
                 future = grpc.channel_ready_future(channel)
@@ -144,8 +145,8 @@ class RemoteMachine(GObject.Object):
 
         cert = self.authenticator.load_cert(self.hostname)
 
-        while cert == None and not self.need_shutdown:
-            connect_for_cert_request()
+        # while cert == None and not self.need_shutdown:
+            # connect_for_cert_request()
 
         while run_secure_loop(cert):
             continue

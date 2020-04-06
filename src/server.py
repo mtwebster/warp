@@ -303,7 +303,8 @@ class Server(warp_pb2_grpc.WarpServicer, GObject.Object):
         return void
 
     def RequestServerCert(self, request, context):
-        return warp_pb2.ServerCert(self.authenticator.get_boxed_server_cert())
+        print("RequestServerCert")
+        return warp_pb2.ServerCert(box=self.authenticator.get_boxed_server_cert())
 
     def add_receive_op_to_remote_machine(self, op):
         self.remote_machines[op.sender].add_op(op)
