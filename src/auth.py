@@ -231,11 +231,11 @@ class AuthManager(GObject.Object):
         return False
 
     def process_remote_cert(self, hostname, zc_dict):
-        print(zc_dict)
+        print("REMOTE", zc_dict)
         box = b''
         for key in zc_dict.keys():
             box += key
-        print(box)
+        # print(box)
         cert = self.unbox_server_cert(box)
         if cert:
             self.save_cert(hostname, cert)

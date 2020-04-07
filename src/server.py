@@ -67,6 +67,7 @@ class Server(warp_pb2_grpc.WarpServicer, GObject.Object):
                                 prefs.get_port(), 0, 0,
                                 self.authenticator.get_boxed_server_cert(),
                                 "somehost.local.")
+        print("LOCAL", self.info.properties)
         self.zeroconf.register_service(self.info)
 
     def start_remote_lookout(self):
