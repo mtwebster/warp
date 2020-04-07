@@ -6,6 +6,7 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.backends import default_backend as crypto_default_backend
 from cryptography.x509.oid import NameOID
 import nacl
+from nacl import secret
 import hashlib
 import datetime
 import stat
@@ -178,23 +179,27 @@ class AuthManager(GObject.Object):
 
     def get_boxed_server_cert(self):
         hasher = hashlib.sha256()
-        m.update(self.get_group_code())
-        key = m.digest()
+        hasher.update(self.get_group_code())
+        key = hasher.digest()
 
-        encoder = nacl.secret.SecretBox(key)
-        return encoder.encrypt(self.load_cert(self.hostname))
+        encoder = secret.SecretBox(key)
+
+        encrypted = encoder.encrypt(self.load_cert(self.hostname))
+        # print("encrypted: ", encrypted)
+        return encrypted
 
     def unbox_server_cert(self, box):
         hasher = hashlib.sha256()
-        m.update(self.get_group_code())
-        key = m.digest()
-
-        decoder = nacl.secret.SecretBox(key)
+        hasher.update(self.get_group_code())
+        key = hasher.digest()
+        # print("decrypt: ", box)
+        decoder = secret.SecretBox(key)
 
         try:
             cert = decoder.decrypt(box)
-        except nacl.exceptions.CryptoError:
+        except nacl.exceptions.CryptoError as e:
             # do something
+            print(e)
             return None
 
         return cert
@@ -213,7 +218,7 @@ class AuthManager(GObject.Object):
     def save_group_code(self, code):
         path = os.path.join(CONFIG_FOLDER, ".groupcode")
 
-        self.save_bytes(code)
+        self.save_bytes(path, code)
 
     def validate_remote_creds(self, hostname, ip, box):
         cert = self.unbox_server_cert(box)
@@ -224,6 +229,16 @@ class AuthManager(GObject.Object):
             return True
 
         return False
+
+    def process_remote_cert(self, hostname, zc_dict):
+        print(zc_dict)
+        box = b''
+        for key in zc_dict.keys():
+            box += key
+        print(box)
+        cert = self.unbox_server_cert(box)
+        if cert:
+            self.save_cert(hostname, cert)
 
 if __name__ == "__main__":
     a = AuthManager()

@@ -63,8 +63,10 @@ class Server(warp_pb2_grpc.WarpServicer, GObject.Object):
         self.zeroconf = Zeroconf()
         self.info = ServiceInfo("_http._tcp.local.",
                                 self.service_name,
-                                socket.inet_aton(util.get_ip()), prefs.get_port(), 0, 0,
-                                {}, "somehost.local.")
+                                socket.inet_aton(util.get_ip()),
+                                prefs.get_port(), 0, 0,
+                                self.authenticator.get_boxed_server_cert(),
+                                "somehost.local.")
         self.zeroconf.register_service(self.info)
 
     def start_remote_lookout(self):
@@ -81,7 +83,7 @@ class Server(warp_pb2_grpc.WarpServicer, GObject.Object):
         try:
             self.emit_remote_machine_removed(self.remote_machines[name])
             self.remote_machines[name].shutdown()
-            # del self.remote_machines[name]
+            del self.remote_machines[name]
             print("Removing remote machine '%s'" % name)
         except KeyError:
             print("Removed client we never knew: %s" % name)
@@ -98,6 +100,8 @@ class Server(warp_pb2_grpc.WarpServicer, GObject.Object):
             # as well as the hostname, since we want to display it whether we get a connection or not.
             remote_ip, remote_hostname = name.replace("warp.__", "").replace("__._http._tcp.local.", "").split("__.__")
             print("Client %s added at %s" % (name, remote_ip))
+
+            self.authenticator.process_remote_cert(remote_hostname, info.properties)
 
             try:
                 machine = self.remote_machines[name]
