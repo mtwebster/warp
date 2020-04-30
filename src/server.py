@@ -249,7 +249,7 @@ class Server(warp_pb2_grpc.WarpServicer, GObject.Object):
 
         try:
             remote = self.remote_machines[request.id]
-            response = (remote.status == RemoteStatus.AWAITING_DUPLEX)
+            response = (remote.status in (RemoteStatus.AWAITING_DUPLEX, RemoteStatus.ONLINE))
         except KeyError:
             pass
 
