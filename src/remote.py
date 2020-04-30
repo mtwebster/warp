@@ -105,10 +105,14 @@ class RemoteMachine(GObject.Object):
                     try:
                         self.stub.Ping(void, timeout=2)
                         if not one_ping:
-                            self.set_remote_status(RemoteStatus.ONLINE)
-                            self.update_remote_machine_info()
-                            self.update_remote_machine_avatar()
-                            one_ping = True
+                            # Wait
+                            self.set_remote_status(RemoteStatus.AWAITING_DUPLEX)
+
+                            if self.check_duplex_connection():
+                                self.set_remote_status(RemoteStatus.ONLINE)
+                                self.update_remote_machine_info()
+                                self.update_remote_machine_avatar()
+                                one_ping = True
                     except grpc.RpcError as e:
                         if e.code() in (grpc.StatusCode.DEADLINE_EXCEEDED, grpc.StatusCode.UNAVAILABLE):
                             one_ping = False
@@ -140,6 +144,11 @@ class RemoteMachine(GObject.Object):
         
         future = self.stub.GetRemoteMachineInfo.future(void)
         future.add_done_callback(get_info_finished)
+
+    def check_duplex_connection(self):
+        ret = self.stub.CheckDuplexConnection(warp_pb2.LookupName(id=self.local_key))
+
+        return ret.response
 
     @util._async
     def update_remote_machine_avatar(self):

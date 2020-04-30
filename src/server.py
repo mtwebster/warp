@@ -17,7 +17,7 @@ import prefs
 import util
 import transfers
 from ops import ReceiveOp
-from util import TransferDirection, OpStatus
+from util import TransferDirection, OpStatus, RemoteStatus
 
 _ = gettext.gettext
 
@@ -243,6 +243,17 @@ class Server(warp_pb2_grpc.WarpServicer, GObject.Object):
 
     def Ping(self, request, context):
         return void
+
+    def CheckDuplexConnection(self, request, context):
+        response = False
+
+        try:
+            remote = self.remote_machines[request.id]
+            reponse = (remote.status == RemoteStatus.AWAITING_DUPLEX)
+        except KeyError:
+            pass
+
+        return warp_pb2.HaveDuplex(response=response)
 
     def GetRemoteMachineInfo(self, request, context):
         return warp_pb2.RemoteMachineInfo(display_name=GLib.get_real_name(),
