@@ -23,7 +23,7 @@ void = warp_pb2.VoidType()
 MAX_CONNECT_RETRIES = 2
 
 DUPLEX_WAIT_PING_TIME = 0.5
-PING_TIME = 5
+PING_TIME = 120
 
 # client
 class RemoteMachine(GObject.Object):
@@ -63,6 +63,7 @@ class RemoteMachine(GObject.Object):
 
         self.ping_timer = threading.Event()
         self.ping_time = DUPLEX_WAIT_PING_TIME
+        self.channel_runlock = threading.Condition()
 
         prefs.prefs_settings.connect("changed::favorites", self.update_favorite_status)
 
@@ -79,7 +80,16 @@ class RemoteMachine(GObject.Object):
         def run_secure_loop(cert):
             creds = grpc.ssl_channel_credentials(cert)
 
-            with grpc.secure_channel("%s:%d" % (self.ip_address, self.port), creds) as channel:
+            options = (
+                ('grpc.keepalive_time_ms', 10000),
+                ('grpc.keepalive_timeout_ms', 5000),
+                ('grpc.keepalive_permit_without_calls', True),
+                ('grpc.http2.max_pings_without_data', 0),
+                ('grpc.http2.min_time_between_pings_ms', 10000),
+                ('grpc.http2.min_ping_interval_without_data_ms', 5000)
+            )
+
+            with grpc.secure_channel("%s:%d" % (self.ip_address, self.port), creds, options=options) as channel:
                 future = grpc.channel_ready_future(channel)
 
                 connect_retries = 0
@@ -89,6 +99,7 @@ class RemoteMachine(GObject.Object):
                         future.result(timeout=2)
                         self.stub = warp_pb2_grpc.WarpStub(channel)
                         self.connected = True
+                        channel.subscribe(self.channel_connectivity_update)
                         break
                     except grpc.FutureTimeoutError:
                         if connect_retries < MAX_CONNECT_RETRIES:
@@ -102,28 +113,25 @@ class RemoteMachine(GObject.Object):
                             future.cancel()
                             return True
 
-                one_ping = False
+                self.set_remote_status(RemoteStatus.AWAITING_DUPLEX)
+
                 while not self.ping_timer.is_set():
-                    try:
-                        self.stub.Ping(void, timeout=2)
-                        if not one_ping:
-                            # Wait
-                            self.set_remote_status(RemoteStatus.AWAITING_DUPLEX)
+                    if self.check_duplex_connection():
+                        self.set_remote_status(RemoteStatus.ONLINE)
+                        self.update_remote_machine_info()
+                        self.update_remote_machine_avatar()
 
-                            if self.check_duplex_connection():
-                                self.set_remote_status(RemoteStatus.ONLINE)
-                                self.update_remote_machine_info()
-                                self.update_remote_machine_avatar()
+                        break
+                    else:
+                        self.ping_timer.wait(self.ping_time)
 
-                                self.ping_time = PING_TIME
-                                one_ping = True
-                    except grpc.RpcError as e:
-                        if e.code() in (grpc.StatusCode.DEADLINE_EXCEEDED, grpc.StatusCode.UNAVAILABLE):
-                            one_ping = False
-                            self.set_remote_status(RemoteStatus.UNREACHABLE)
+                with self.channel_runlock:
+                    print("Channel connected: %s" % self.hostname)
+                    self.channel_runlock.wait()
+                    print("Channel disconnecting: %s" % self.hostname)
+                    channel.unsubscribe(self.channel_connectivity_update)
 
-                    self.ping_timer.wait(self.ping_time)
-                return False
+                    return False
 
         cert = auth.get_singleton().load_cert(self.hostname, self.ip_address)
 
@@ -131,6 +139,17 @@ class RemoteMachine(GObject.Object):
             continue
 
         self.connected = False
+
+    def channel_connectivity_update(self, status):
+        print(status)
+        if status == grpc.ChannelConnectivity.READY:
+            print("READY")
+            self.set_remote_status(RemoteStatus.ONLINE)
+            self.update_remote_machine_info()
+            self.update_remote_machine_avatar()
+        elif status == grpc.ChannelConnectivity.IDLE:
+            print("IDLE")
+            self.set_remote_status(RemoteStatus.UNREACHABLE)
 
     @util._async
     def update_remote_machine_info(self):
@@ -416,6 +435,8 @@ class RemoteMachine(GObject.Object):
     def shutdown(self):
         print("-- Closing connection to remote machine %s (%s)" % (self.display_hostname, self.ip_address))
         self.set_remote_status(RemoteStatus.OFFLINE)
+        with self.channel_runlock:
+            self.channel_runlock.notify()
         self.ping_timer.set()
         while self.connected:
             time.sleep(0.1)
