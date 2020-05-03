@@ -21,9 +21,10 @@ _ = gettext.gettext
 void = warp_pb2.VoidType()
 
 MAX_CONNECT_RETRIES = 2
+MAX_PING_RETRIES = 10
 
-DUPLEX_WAIT_PING_TIME = 0.5
-PING_TIME = 5
+NOT_CONNECTED_WAIT_PING_TIME = 2
+CONNECTED_PING_TIME = 10
 
 # client
 class RemoteMachine(GObject.Object):
@@ -62,7 +63,7 @@ class RemoteMachine(GObject.Object):
         self.sort_key = self.hostname
 
         self.ping_timer = threading.Event()
-        self.ping_time = DUPLEX_WAIT_PING_TIME
+        self.ping_time = NOT_CONNECTED_WAIT_PING_TIME
 
         prefs.prefs_settings.connect("changed::favorites", self.update_favorite_status)
 
@@ -104,6 +105,8 @@ class RemoteMachine(GObject.Object):
 
                 one_ping = False
                 while not self.ping_timer.is_set():
+                    ping_retry_count = 0
+
                     try:
                         self.stub.Ping(void, timeout=2)
                         if not one_ping:
@@ -115,12 +118,17 @@ class RemoteMachine(GObject.Object):
                                 self.update_remote_machine_info()
                                 self.update_remote_machine_avatar()
 
-                                self.ping_time = PING_TIME
+                                self.ping_time = CONNECTED_PING_TIME
                                 one_ping = True
                     except grpc.RpcError as e:
                         if e.code() in (grpc.StatusCode.DEADLINE_EXCEEDED, grpc.StatusCode.UNAVAILABLE):
                             one_ping = False
-                            self.set_remote_status(RemoteStatus.UNREACHABLE)
+                            self.ping_time = NOT_CONNECTED_WAIT_PING_TIME
+                            if ping_retry_count < MAX_PING_RETRIES
+                                self.set_remote_status(RemoteStatus.UNREACHABLE)
+                                ping_retry_count += 1
+                            else:
+                                return True
 
                     self.ping_timer.wait(self.ping_time)
                 return False
