@@ -78,7 +78,9 @@ class RemoteMachine(GObject.Object):
         self.emit_machine_info_changed() # Let's make sure the button doesn't have junk in it if we fail to connect.
 
         logging.info("== Attempting to connect to %s (%s)" % (self.display_hostname, self.ip_address))
+
         self.set_remote_status(RemoteStatus.INIT_CONNECTING)
+        self.ping_time = NOT_CONNECTED_WAIT_PING_TIME
 
         def run_secure_loop(cert):
             creds = grpc.ssl_channel_credentials(cert)

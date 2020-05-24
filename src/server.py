@@ -246,12 +246,11 @@ class Server(warp_pb2_grpc.WarpServicer, GObject.Object):
 
         try:
             auth.get_singleton().cert_server.stop()
-            self.browser.cancel()
-            self.zeroconf.unregister_service(self.info)
             self.zeroconf.close()
-        except AttributeError as e:
-            logging.debug(e, stack_info=True)
+        except AttributeError:
             pass # zeroconf never started if the server never started
+        except Exception as e:
+            logging.debug(e, stack_info=True)
 
         auth.get_singleton().clean_cert_folder()
 
