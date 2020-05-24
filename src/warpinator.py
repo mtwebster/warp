@@ -1319,6 +1319,8 @@ def main(test=False, debug=False):
 
     if debug:
         logging.root.setLevel(logging.DEBUG)
+    else:
+        logging.root.setLevel(logging.INFO)
 
     w = WarpApplication(test)
     signal.signal(signal.SIGINT, lambda s, f: w.shutdown())
