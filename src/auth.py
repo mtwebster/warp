@@ -92,7 +92,7 @@ class AuthManager(GObject.Object):
         self.clean_cert_folder()
 
         for key in self.requests.keys():
-            self.requests[key].timer.set()
+            self.requests[key].cancel()
 
     def clean_cert_folder(self):
         for filename in os.listdir(CERT_FOLDER):
@@ -313,32 +313,31 @@ class AuthManager(GObject.Object):
         encoded = base64.encodebytes(box)
         return encoded
 
-    def retrieve_remote_cert(self, hostname, ip, port):
-        key = "%s:%s" % (ip, port)
-
+    def retrieve_remote_cert(self, ident, hostname, ip, port):
         with self.requests_lock:
             req = RequestLoop(ip, port)
 
-            self.requests[key] = req
+            self.requests[ident] = req
 
         data = req.request()
-
 
         if data == None:
             return False
 
         return self.process_encoded_server_cert(hostname, ip, data)
 
-    def cancel_request_loop(self, ip, port):
-        key = "%s:%s" % (ip, port)
+    def cancel_request_loop(self, ident):
+        req = None
 
         with self.requests_lock:
-            req = self.requests[key]
+            try:
+                req = self.requests[ident]
+                del self.requests[ident]
+            except KeyError:
+                pass
 
-        req.cancel()
-
-        with self.requests_lock:
-            del self.requests[key]
+        if req:
+            req.cancel()
 
 ############################ Getting server certificate via udp after discovery ###########
 

@@ -100,6 +100,7 @@ class Server(threading.Thread, warp_pb2_grpc.WarpServicer, GObject.Object):
             return
 
         ident = name.partition(".")[0]
+        auth.get_singleton().cancel_request_loop(ident)
 
         try:
             self.idle_emit("remote-machine-removed", self.remote_machines[ident])
@@ -138,7 +139,7 @@ class Server(threading.Thread, warp_pb2_grpc.WarpServicer, GObject.Object):
             # This will block if the remote's warp udp port is closed, until either the port is unblocked
             # or we tell the auth object to shutdown, in which case the request timer will cancel and return
             # here immediately (with None)
-            got_cert = auth.get_singleton().retrieve_remote_cert(remote_hostname, remote_ip, info.port)
+            got_cert = auth.get_singleton().retrieve_remote_cert(ident, remote_hostname, remote_ip, info.port)
 
             if not got_cert:
                 logging.critical("Unable to authenticate with %s (%s)" % (remote_hostname, remote_ip))
