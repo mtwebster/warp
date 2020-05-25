@@ -314,12 +314,18 @@ class AuthManager(GObject.Object):
         return encoded
 
     def retrieve_remote_cert(self, ident, hostname, ip, port):
+        logging.debug("Starting a new RequestLoop for '%s' (%s:%d)" % (hostname, ip, port))
         with self.requests_lock:
             req = RequestLoop(ip, port)
 
             self.requests[ident] = req
 
         data = req.request()
+
+        with self.requests_lock:
+            del self.requests[ident]
+
+        logging.debug("RequestLoop complete for '%s' (%s:%d): got cert? %s" % (hostname, ip, port, "Yes" if data else "No"))
 
         if data == None:
             return False
@@ -349,8 +355,6 @@ class RequestLoop():
         self.timer = threading.Event()
 
     def request(self):
-        logging.debug("Requesting cert from remote (%s:%d)" % (self.ip, self.port))
-
         while not self.timer.is_set():
             logging.debug("Requesting cert from remote (%s:%d)" % (self.ip, self.port))
             try_count = 0
@@ -372,6 +376,8 @@ class RequestLoop():
                     logging.critical("Something wrong with cert request (%s:%s): " % (self.ip, self.port, e))
                     break
             self.timer.wait(5)
+
+        logging.critical("RequestLoop canceled (event set) for (%s:%s)" % (self.ip, self.port))
         return None
 
     def cancel(self):
