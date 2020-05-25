@@ -135,6 +135,9 @@ class Server(threading.Thread, warp_pb2_grpc.WarpServicer, GObject.Object):
             if ident == self.service_ident:
                 return
 
+            # This will block if the remote's warp udp port is closed, until either the port is unblocked
+            # or we tell the auth object to shutdown, in which case the request timer will cancel and return
+            # here immediately (with None)
             got_cert = auth.get_singleton().retrieve_remote_cert(remote_hostname, remote_ip, info.port)
 
             if not got_cert:
