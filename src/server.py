@@ -22,15 +22,12 @@ from util import TransferDirection, OpStatus, RemoteStatus
 
 _ = gettext.gettext
 
-#typedef
 void = warp_pb2.VoidType()
 
-MAX_CONNECT_RETRIES = 2
-PING_TIME = 5
 SERVICE_TYPE = "_warpinator._tcp.local."
 
 # server
-class Server(warp_pb2_grpc.WarpServicer, GObject.Object):
+class Server(threading.Thread, warp_pb2_grpc.WarpServicer, GObject.Object):
     __gsignals__ = {
         "remote-machine-added": (GObject.SignalFlags.RUN_LAST, None, (object,)),
         "remote-machine-removed": (GObject.SignalFlags.RUN_LAST, None, (object,)),
@@ -40,6 +37,7 @@ class Server(warp_pb2_grpc.WarpServicer, GObject.Object):
         "shutdown-complete": (GObject.SignalFlags.RUN_LAST, None, ())
     }
     def __init__(self):
+        threading.Thread.__init__(self, name="server-thread")
         super(Server, self).__init__()
         GObject.Object.__init__(self)
 
@@ -60,8 +58,7 @@ class Server(warp_pb2_grpc.WarpServicer, GObject.Object):
         self.info = None
 
         self.display_name = GLib.get_real_name()
-
-        self.start_server()
+        self.start()
 
     def start_zeroconf(self):
         self.zeroconf = Zeroconf()
@@ -185,11 +182,10 @@ class Server(warp_pb2_grpc.WarpServicer, GObject.Object):
 
             machine.start()
 
-    @util._async
-    def start_server(self):
+    def run(self):
         logging.debug("Starting server")
 
-        self.server = grpc.server(futures.ThreadPoolExecutor(max_workers=10), options=None)
+        self.server = grpc.server(futures.ThreadPoolExecutor(max_workers=4), options=None)
         warp_pb2_grpc.add_WarpServicer_to_server(self, self.server)
 
         pair = auth.get_singleton().get_server_creds()
@@ -219,13 +215,20 @@ class Server(warp_pb2_grpc.WarpServicer, GObject.Object):
 
         remote_machines = None
 
+        logging.debug("Stopping authentication server")
         auth.get_singleton().cert_server.stop()
         auth.get_singleton().clean_cert_folder()
+
+        logging.debug("Stopping discovery and advertisement")
         self.zeroconf.close()
 
+        logging.debug("Terminating server")
         self.server.stop(grace=2).wait()
+
         self.idle_emit("shutdown-complete")
         self.server = None
+
+        logging.debug("Server stopped")
 
     def shutdown(self):
         self.server_thread_keepalive.set()
