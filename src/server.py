@@ -216,8 +216,7 @@ class Server(threading.Thread, warp_pb2_grpc.WarpServicer, GObject.Object):
         remote_machines = None
 
         logging.debug("Stopping authentication server")
-        auth.get_singleton().cert_server.stop()
-        auth.get_singleton().clean_cert_folder()
+        auth.get_singleton().shutdown()
 
         logging.debug("Stopping discovery and advertisement")
         self.zeroconf.close()

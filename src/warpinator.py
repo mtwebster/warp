@@ -1073,7 +1073,10 @@ class WarpApplication(Gtk.Application):
         if self.server:
             self.setup_kill_as_a_last_resort()
             self.server.shutdown()
-
+            # do_shutdown is called after the main loop is ended, we need to continue
+            # the loop while waiting for the server to finish shutting down.  This is the
+            # only way we can come close to a clean exit when being killed or shutdown via
+            # the session manager.
             while self.server.is_alive():
                 GLib.MainContext.default().iteration(may_block=False)
 
@@ -1327,6 +1330,7 @@ def main(test=False, debug=False):
 
     w = WarpApplication(test)
     signal.signal(signal.SIGINT, lambda s, f: w.exit_warp())
+    signal.signal(signal.SIGTERM, lambda s, f: w.exit_warp())
 
     return w.run(sys.argv)
 
