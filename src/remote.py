@@ -22,7 +22,6 @@ _ = gettext.gettext
 void = warp_pb2.VoidType()
 
 MAX_CONNECT_RETRIES = 2
-MAX_PING_RETRIES = 10
 
 NOT_CONNECTED_WAIT_PING_TIME = 1
 CONNECTED_PING_TIME = 10
@@ -74,8 +73,11 @@ class RemoteMachine(GObject.Object):
 
         prefs.prefs_settings.connect("changed::favorites", self.update_favorite_status)
 
+        self.has_zc_presence = False
+
     @util._async
     def start(self):
+        self.ping_timer.set()
         self.ping_timer.clear()
 
         self.emit_machine_info_changed() # Let's make sure the button doesn't have junk in it if we fail to connect.
@@ -111,6 +113,9 @@ class RemoteMachine(GObject.Object):
                             future.cancel()
                             return True
 
+                if self.ping_timer.is_set():
+                    return False
+
                 ping_retry_count = 0
                 one_ping = False
 
@@ -138,16 +143,8 @@ class RemoteMachine(GObject.Object):
                                     self.ping_time = CONNECTED_PING_TIME
                                     one_ping = True
                         except grpc.RpcError as e:
-                            logging.debug("Ping timeout (%s)" % self.display_hostname)
-                            if e.code() in (grpc.StatusCode.DEADLINE_EXCEEDED, grpc.StatusCode.UNAVAILABLE):
-                                one_ping = False
-                                self.ping_time = NOT_CONNECTED_WAIT_PING_TIME
-                                if ping_retry_count < MAX_PING_RETRIES:
-                                    self.set_remote_status(RemoteStatus.UNREACHABLE)
-                                    ping_retry_count += 1
-                                else:
-                                    logging.debug("Ping retry exceeded, going to reset the connection (%s)" % self.display_hostname)
-                                    return True
+                            logging.debug("Ping timeout, shutting down (%s)" % self.display_hostname)
+                            self.ping_timer.set()
 
                     self.ping_timer.wait(self.ping_time)
                 return False
@@ -157,6 +154,7 @@ class RemoteMachine(GObject.Object):
         while run_secure_loop(cert):
             continue
 
+        self.set_remote_status(RemoteStatus.OFFLINE)
         self.connected = False
 
     def shutdown(self):
@@ -371,7 +369,8 @@ class RemoteMachine(GObject.Object):
                 else:
                     op.set_status(OpStatus.FAILED)
         else:
-            op.file_iterator.cancel()
+            if op.file_iterator:
+                op.file_iterator.cancel()
             if not lost_connection:
                 logging.debug("stop transfer initiated by receiver")
                 if op.error_msg == "":
