@@ -138,6 +138,7 @@ class RemoteMachine(GObject.Object):
                                            timeout=5)
                             if not one_ping:
                                 # Wait
+                                one_ping = True
                                 self.set_remote_status(RemoteStatus.AWAITING_DUPLEX)
 
                                 if self.check_duplex_connection():
@@ -150,7 +151,6 @@ class RemoteMachine(GObject.Object):
                                     self.rpc_call(self.update_remote_machine_avatar)
 
                                     self.ping_time = CONNECTED_PING_TIME
-                                    one_ping = True
                         except grpc.RpcError as e:
                             logging.debug("Ping timeout, shutting down (%s)" % self.display_hostname)
                             self.ping_timer.set()
