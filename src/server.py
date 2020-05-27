@@ -27,7 +27,8 @@ void = warp_pb2.VoidType()
 
 SERVICE_TYPE = "_warpinator._tcp.local."
 
-# server
+# server (this is on a separate thread from the ui, grpc isn't compatible with
+# gmainloop)
 class Server(threading.Thread, warp_pb2_grpc.WarpServicer, GObject.Object):
     __gsignals__ = {
         "remote-machine-added": (GObject.SignalFlags.RUN_LAST, None, (object,)),
