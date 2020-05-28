@@ -104,6 +104,7 @@ class Server(threading.Thread, warp_pb2_grpc.WarpServicer, GObject.Object):
             return
 
         ident = name.partition(".")[0]
+        auth.get_singleton().cancel_request_loop(ident)
 
         try:
             remote = self.remote_machines[ident]
