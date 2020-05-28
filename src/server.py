@@ -156,16 +156,30 @@ class Server(threading.Thread, warp_pb2_grpc.WarpServicer, GObject.Object):
                 return True
 
             try:
-                remote.has_zc_presence = True
                 machine = self.remote_machines[ident]
+                machine.has_zc_presence = True
                 logging.debug(">> Discovery: existing remote: %s (%s:%d)"
                                   % (machine.display_hostname, remote_ip, info.port))
+
+                # If the remote truly is the same one (our service info just dropped out
+                # momentarily), this will end up just retrieving the current cert again.
+                # If this was a real disconnect we didn't notice, we'll have the new cert
+                # which we'll need when our supposedly existing connection tries to continue
+                # pinging. It will fail out and restart the connection loop, and will need
+                # this updated one.
+                if not check_cert():
+                    return
 
                 if machine.status == RemoteStatus.ONLINE:
                     return
 
-                if not check_cert():
-                    return
+                logging.debug("Closing previous connection for %s (%s%d)"
+                                  % (machine.display_hostname, remote_ip, info.port))
+                machine.shutdown() # This does nothing if run more than once.  It's here to make sure
+                                   # the previous start thread is complete before starting a new one.
+                                   # This is needed in the corner case where the remote has gone offline,
+                                   # and returns before our Ping loop times out and closes the thread
+                                   # itself.
 
                 # Update our connect info if it changed.
                 machine.hostname = remote_hostname
@@ -241,6 +255,9 @@ class Server(threading.Thread, warp_pb2_grpc.WarpServicer, GObject.Object):
         remote_machines = list(self.remote_machines.values())
         for remote in remote_machines:
             self.idle_emit("remote-machine-removed", remote)
+            logging.debug("-- Closing connection to remote machine %s (%s:%d)"
+                              % (remote.display_hostname, remote.ip_address, remote.port))
+
             remote.shutdown()
 
         remote_machines = None
