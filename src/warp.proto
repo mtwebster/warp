@@ -26,7 +26,7 @@ service Warp {
 
     rpc Ping(LookupName) returns (VoidType) {}
 
-    rpc GetCertificate(VoidType) returns (Certificate) {}
+    rpc GetCertificate(LookupName) returns (Certificate) {}
 }
 
 message RemoteMachineInfo {

@@ -77,7 +77,7 @@ class WarpStub(object):
         )
     self.GetCertificate = channel.unary_unary(
         '/Warp/GetCertificate',
-        request_serializer=warp__pb2.VoidType.SerializeToString,
+        request_serializer=warp__pb2.LookupName.SerializeToString,
         response_deserializer=warp__pb2.Certificate.FromString,
         )
 
@@ -236,7 +236,7 @@ def add_WarpServicer_to_server(servicer, server):
       ),
       'GetCertificate': grpc.unary_unary_rpc_method_handler(
           servicer.GetCertificate,
-          request_deserializer=warp__pb2.VoidType.FromString,
+          request_deserializer=warp__pb2.LookupName.FromString,
           response_serializer=warp__pb2.Certificate.SerializeToString,
       ),
   }

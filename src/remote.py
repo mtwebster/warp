@@ -211,7 +211,8 @@ class RemoteMachine(GObject.Object):
     def get_certificate(self):
         logging.debug("Remote: asking for certificate from '%s'" % self.display_hostname)
 
-        ret = self.stub.GetCertificate(void)
+        ret = self.stub.GetCertificate(warp_pb2.LookupName(id=self.local_ident,
+                                                           readable_name=util.get_hostname()))
 
         if auth.get_singleton().process_encoded_server_cert(self.hostname, self.ip_address, ret.cert_base64):
             return True
