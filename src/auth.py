@@ -67,7 +67,6 @@ class AuthManager(GObject.Object):
         self.ip = ip
         self.port = port
 
-        self.cert_server = None
         self.requests_lock = threading.Lock()
         self.requests = {}
 
@@ -85,22 +84,12 @@ class AuthManager(GObject.Object):
                 logging.debug("Auth: Could not load existing keyfile (%s): %s" %(CONFIG_FOLDER, e.message))
 
         self.code = self.get_group_code()
-        self.start_cert_server()
-
-    def start_cert_server(self):
-        if self.cert_server != None:
-            self.cert_server.stop()
-
-        self.cert_server = CertServer(self.ip, self.port)
 
     def shutdown(self):
         with self.requests_lock:
             for key in self.requests.keys():
                 self.requests[key].cancel()
             self.requests = {}
-
-        if self.cert_server != None:
-            self.cert_server.stop()
 
         self.clean_cert_folder()
 
@@ -322,118 +311,3 @@ class AuthManager(GObject.Object):
 
         encoded = base64.encodebytes(box)
         return encoded
-
-    def retrieve_remote_cert(self, ident, hostname, ip, port):
-        logging.debug("Auth: Starting a new RequestLoop for '%s' (%s:%d)" % (hostname, ip, port))
-        with self.requests_lock:
-            req = RequestLoop(ip, port)
-
-            self.requests[ident] = req
-
-        data = req.request()
-
-        with self.requests_lock:
-            try:
-                del self.requests[ident]
-            except KeyError:
-                pass
-
-        logging.debug("Auth: RequestLoop complete for '%s' (%s:%d): got cert? %s" % (hostname, ip, port, "Yes" if data else "No"))
-
-        if data == None:
-            return False
-
-        return self.process_encoded_server_cert(hostname, ip, data)
-
-    def cancel_request_loop(self, ident):
-        req = None
-
-        with self.requests_lock:
-            try:
-                req = self.requests[ident]
-                req.cancel()
-            except KeyError:
-                pass
-
-############################ Getting server certificate via udp after discovery ###########
-
-class RequestLoop():
-    def __init__(self, ip, port):
-        self.ip = ip
-        self.port = port
-
-        self.timer = threading.Event()
-
-    def request(self):
-        self.timer.clear()
-
-        while not self.timer.is_set():
-            logging.debug("Auth: Requesting cert from remote (%s:%d)" % (self.ip, self.port))
-            try_count = 0
-
-            while try_count < 3:
-                try:
-                    server_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-                    server_sock.settimeout(1.0)
-                    server_sock.sendto(REQUEST, (self.ip, self.port))
-
-                    reply, addr = server_sock.recvfrom(2000)
-
-                    if self.timer.is_set():
-                        return None
-
-                    if addr == (self.ip, self.port):
-                        return reply
-                except socket.timeout:
-                    try_count += 1
-                    continue
-                except socket.error as e:
-                    logging.critical("Something wrong with cert request (%s:%s): " % (self.ip, self.port, e))
-                    break
-
-            logging.debug("Auth: Cert request failed from remote (%s:%d), waiting 30s to try again. (Is their udp port blocked?"
-                              % (self.ip, self.port))
-            self.timer.wait(30)
-
-        logging.debug("Auth: RequestLoop canceled (event set) for (%s:%s)" % (self.ip, self.port))
-        return None
-
-    def cancel(self):
-        self.timer.set()
-
-class CertServer():
-    def __init__(self, ip, port):
-        self.exit = False
-        self.ip = ip
-        self.port = port
-        logging.debug("Auth: Starting local cert server (%s)" % self.ip)
-
-        self.thread = threading.Thread(target=self.serve_cert_thread)
-        self.thread.start()
-
-    def serve_cert_thread(self):
-        try:
-            server_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            server_sock.settimeout(1.0)
-            server_sock.bind((self.ip, self.port))
-        except socket.error as e:
-            logging.critical("Could not create udp socket for cert requests: %s" % str(e))
-            return
-
-        while True:
-            try:
-                data, address = server_sock.recvfrom(2000)
-
-                if data == REQUEST:
-                    cert_data = get_singleton().get_encoded_server_cert()
-                    server_sock.sendto(cert_data, address)
-            except socket.timeout as e:
-                if self.exit:
-                    server_sock.close()
-                    break
-
-    def stop(self):
-        logging.debug("Auth: Stopping local cert server (%s)" % self.ip)
-        self.exit = True
-        self.thread.join()
-

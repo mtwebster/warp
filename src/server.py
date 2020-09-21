@@ -112,7 +112,6 @@ class Server(threading.Thread, warp_pb2_grpc.WarpServicer, GObject.Object):
             return
 
         ident = name.partition(".")[0]
-        auth.get_singleton().cancel_request_loop(ident)
 
         try:
             remote = self.remote_machines[ident]
@@ -167,25 +166,6 @@ class Server(threading.Thread, warp_pb2_grpc.WarpServicer, GObject.Object):
             if ident == self.service_ident:
                 return
 
-            def check_cert():
-                # This will block if the remote's warp udp port is closed, until either the port is unblocked
-                # or we tell the auth object to shutdown, in which case the request timer will cancel and return
-                # here immediately (with None)
-                got_cert = auth.get_singleton().retrieve_remote_cert(ident, remote_hostname, remote_ip, info.port)
-
-                if not got_cert:
-                    logging.critical(">>> Discovery: unable to authenticate with %s (%s:%d)"
-                                         % (remote_hostname, remote_ip, info.port))
-                    return False
-
-                # This check isn't instant.  Make sure this server is still valid before continuing.
-                if self.server_thread_keepalive.is_set():
-                    logging.warning(">>> Discovery: server shutting down, ignoring remote cert result %s (%s:%d)"
-                                         % (remote_hostname, remote_ip, info.port))
-                    return False
-
-                return True
-
             version = "1.0.9"## FIXME should be 1.0.8 for release, just easier to test while we're still tagged .8
 
             try:
@@ -205,7 +185,13 @@ class Server(threading.Thread, warp_pb2_grpc.WarpServicer, GObject.Object):
                 # which we'll need when our supposedly existing connection tries to continue
                 # pinging. It will fail out and restart the connection loop, and will need
                 # this updated one.
-                if not machine.run_authenticate():
+                if not remote.authenticate_remote(remote_ip,
+                                                  info.port,
+                                                  ident,
+                                                  remote_hostname,
+                                                  machine.display_hostname):
+                    logging.critical(">>> Discovery: unable to re-authenticate existing remote: %s"
+                                     % machine.display_hostname)
                     return
 
                 if machine.status == RemoteStatus.ONLINE:
@@ -219,8 +205,14 @@ class Server(threading.Thread, warp_pb2_grpc.WarpServicer, GObject.Object):
                 machine.port = info.port
                 machine.version = version
             except KeyError:
-                # if not check_cert():
-                #     return
+                if not remote.authenticate_remote(remote_ip,
+                                                  info.port,
+                                                  ident,
+                                                  remote_hostname,
+                                                  remote_hostname):
+                    logging.critical(">>> Discovery: unable to authenticate new remote: %s"
+                                     % remote_hostname)
+                    return
 
                 display_hostname = remote_hostname
                 i = 1
@@ -251,10 +243,6 @@ class Server(threading.Thread, warp_pb2_grpc.WarpServicer, GObject.Object):
                                                info.port,
                                                self.service_ident,
                                                version)
-
-                if not machine.run_authenticate():
-                    logging.critical("NEW REMOTE FAILED AUTH")
-                    return
 
                 self.remote_machines[ident] = machine
                 machine.connect("ops-changed", self.remote_ops_changed)
@@ -299,11 +287,13 @@ class Server(threading.Thread, warp_pb2_grpc.WarpServicer, GObject.Object):
         pair = auth.get_singleton().get_server_creds(self.ip_address)
         server_credentials = grpc.ssl_server_credentials((pair,))
 
+        # Used only to get the remote's server certificate.
+        self.server.add_insecure_port('%s:%d' % (self.ip_address, self.port))
+
+        # Used for operating connection..
         self.server.add_secure_port('%s:%d' % (self.ip_address, self.port),
                                     server_credentials)
 
-
-        self.server.add_insecure_port('%s:%d' % (self.ip_address, self.port))
         self.server.start()
 
         self.start_zeroconf()
