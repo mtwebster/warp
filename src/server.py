@@ -99,6 +99,10 @@ class Server(threading.Thread, warp_pb2_grpc.WarpServicer, GObject.Object):
 
         return False
 
+    # Will be mandatory eventually, this will have to be here even if we don't care about it.
+    def update_service(self, zeroconf, _type, name):
+        logging.debug(">>> Discovery: update_service called (%s) by zc (ignoring)." % ident)
+
     # Zeroconf worker thread
     def remove_service(self, zeroconf, _type, name):
         if name == self.service_name:
