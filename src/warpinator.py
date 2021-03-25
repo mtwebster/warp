@@ -994,6 +994,10 @@ class WarpApplication(Gtk.Application):
         self.netmon = None
         self.server = None
 
+        # Set if the network state or somethign else changes while the server is starting,
+        # restart it as soon as possible.
+        self.server_state_dirty = False
+
         # This is only so we can check if the port changed when setting preferences
         self.current_port = prefs.get_port()
         self.current_ip = util.get_preferred_ip()
@@ -1018,11 +1022,18 @@ class WarpApplication(Gtk.Application):
 
         logging.debug("UI: Creating window and status icon")
 
-        if self.status_icon == None:
-            self.update_status_icon_from_preferences()
-
         if self.window == None:
-            self.setup_window()
+            self.window = WarpWindow()
+            self.window.connect("exit", lambda w: self.exit_warp())
+
+            self.add_window(self.window.window)
+
+            if prefs.get_start_with_window() or not prefs.use_tray_icon():
+                self.window.window.present()
+
+                self.setup_window()
+
+        self.update_status_icon_from_preferences()
 
         try:
             self.save_folder_monitor.cancel()
@@ -1059,16 +1070,23 @@ class WarpApplication(Gtk.Application):
         self.netmon.connect("ready", self.netmon_ready)
 
     def netmon_ready(self, netmon):
+        logging.debug("Network client initialized")
         self.netmon.disconnect_by_func(self.netmon_ready)
         self.netmon.connect("state-changed", self.network_state_changed)
+        self.new_server()
+
+    def network_state_changed(self, netmon, online):
         self.new_server()
 
     def new_server(self):
         if self.server_starting:
             logging.debug("Trying to start server while server already starting, will check later")
+            self.server_state_dirty = True
             return
 
+        self.server_state_dirty = False
         self.server_starting = True
+
         self.window.start_startup_timer(restarting=False)
 
         self.current_port = prefs.get_port()
@@ -1077,15 +1095,6 @@ class WarpApplication(Gtk.Application):
 
         logging.debug("New server requested for '%s' (%s)", self.current_iface, self.current_ip)
 
-        self.netmon.update_current_network(self.current_iface, self.current_ip)
-
-        if auth.singleton != None:
-            try:
-                auth.get_singleton().disconnect_by_func(self.on_group_code_changed)
-            except:
-                pass
-
-        self.update_status_icon_from_preferences()
         self.window.update_local_user_info(self.current_ip)
 
         self.window.clear_remotes()
@@ -1102,7 +1111,7 @@ class WarpApplication(Gtk.Application):
 
             self.server = None
 
-            if self.current_ip == "0.0.0.0" or not self.netmon.online:
+            if not self.netmon.set_active_network(self.current_iface, self.current_ip):
                 logging.info("No network access")
                 self.server_starting = False
                 self.window.show_no_network()
@@ -1124,17 +1133,15 @@ class WarpApplication(Gtk.Application):
     def _server_started(self, local_machine):
         self.server_starting = False
 
-        if self.state_changed_during_server_startup():
+        if self.server_state_dirty:
             self.new_server()
             return
 
         self.update_status_icon_online_state(online=True)
         self.window.notify_server_started()
-        self.add_simulated_widgets()
 
-    def state_changed_during_server_startup(self):
-        return not self.net_details_are_current() or \
-               not self.netmon.online
+        if self.test_mode:
+            self.add_simulated_widgets()
 
     def do_shutdown(self):
         logging.debug("Beginning shutdown")
@@ -1162,10 +1169,6 @@ class WarpApplication(Gtk.Application):
         logging.debug("Shutdown complete")
         Gio.Application.do_shutdown(self)
 
-    def network_state_changed(self, netmon, online):
-        self.update_status_icon_online_state(online)
-        self.new_server()
-
     def exit_warp(self):
         GLib.idle_add(self.quit)
 
@@ -1177,18 +1180,12 @@ class WarpApplication(Gtk.Application):
         time.sleep(10)
         os.system("kill -9 %s &" % os.getpid())
 
-    def setup_window(self):
-        self.window = WarpWindow()
-        self.window.connect("exit", lambda w: self.exit_warp())
-
-        self.add_window(self.window.window)
-
-        if prefs.get_start_with_window() or not prefs.use_tray_icon():
-            self.window.window.present()
-
     def on_prefs_changed(self, settings, pspec=None, data=None):
         if not self.net_details_are_current():
+            logging.debug("Prefs changed new server")
             self.new_server()
+
+        self.update_status_icon_from_preferences()
 
     def net_details_are_current(self):
         return prefs.get_port() == self.current_port and \
@@ -1196,10 +1193,6 @@ class WarpApplication(Gtk.Application):
                prefs.get_net_iface() == self.current_iface
 
     def firewall_script_finished(self):
-        if self.server == None:
-            self.new_server()
-            return
-
         self.new_server()
 
     def on_group_code_changed(self, auth_manager):
@@ -1222,9 +1215,8 @@ class WarpApplication(Gtk.Application):
         self.update_inhibitor_state(local_machine)
 
     def add_simulated_widgets(self):
-        if self.test_mode:
-            import testing
-            testing.add_simulated_widgets(self)
+        import testing
+        testing.add_simulated_widgets(self)
 
     def update_inhibitor_state(self, local_machine):
         any_active_ops = False

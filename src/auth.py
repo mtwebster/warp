@@ -216,7 +216,7 @@ class AuthManager(GObject.Object):
         builder = builder.public_key(public_key)
         builder = builder.add_extension(
             x509.SubjectAlternativeName(
-                [x509.IPAddress(ipaddress.IPv4Address(ip))]
+                [x509.IPAddress(ipaddress.IPv4Address(self.ip))]
             ),
             critical=True
         )
