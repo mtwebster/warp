@@ -11,6 +11,7 @@ pyconf.set('locale_dir', locale_dir)
 pyconf.set('include_firewall_mod', include_firewall_mod)
 pyconf.set('bundle_zeroconf', bundle_zeroconf)
 pyconf.set('flatpak_build', get_option('flatpak-build'))
+pyconf.set_quoted('RPC_API_VERSION', RPC_API_VERSION)
 
 config_py = configure_file(
   output: 'config.py',
@@ -26,13 +27,13 @@ libexec_py = [
   'ops.py',
   'prefs.py',
   'remote.py',
+  'remote_registration.py',
   'server.py',
   'transfers.py',
   'util.py',
   'warpinator.py',
   'warp_pb2.py',
-  'warp_pb2_grpc.py',
-  'wrappers.py'
+  'warp_pb2_grpc.py'
 ]
 
 install_data(libexec_py,
