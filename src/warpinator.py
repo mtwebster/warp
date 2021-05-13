@@ -17,6 +17,7 @@ import config
 import prefs
 import util
 import server
+import qr
 import auth
 import networkmonitor
 from ops import SendOp, ReceiveOp
@@ -531,6 +532,10 @@ class WarpWindow(GObject.Object):
         item.connect("activate", self.open_preferences)
         menu.add(item)
 
+        item = Gtk.MenuItem(label=_("Share info"))
+        item.connect("activate", self.show_qr_window)
+        menu.add(item)
+
         item = Gtk.MenuItem(label=_("About"))
         item.connect("activate", self.show_about)
         menu.add(item)
@@ -559,6 +564,9 @@ class WarpWindow(GObject.Object):
         self.user_clear_ops_button.connect("clicked", self.clear_ops_clicked)
 
         self.update_local_user_info()
+
+    def show_qr_window(self, widget):
+        qr.show_window(self.window, Gtk.get_current_event_time())
 
     def show_about(self, widget):
         util.AboutDialog(self.window)

@@ -3,6 +3,7 @@ data = [
   'op-item.ui',
   'overview-button.ui',
   'prefs-window.ui',
+  'qr-window.ui'
 ]
 
 install_data(data,

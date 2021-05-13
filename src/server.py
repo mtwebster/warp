@@ -288,7 +288,9 @@ class Server(threading.Thread, warp_pb2_grpc.WarpServicer, GObject.Object):
             ('grpc.keepalive_permit_without_calls', True),
             ('grpc.http2.max_pings_without_data', 0),
             ('grpc.http2.min_time_between_pings_ms', 10 * 1000),
-            ('grpc.http2.min_ping_interval_without_data_ms',  5 * 1000)
+            ('grpc.http2.min_ping_interval_without_data_ms',  5 * 1000),
+            ('grpc.tsi.max_frame_size', 1024 * 1024)
+
         )
 
         self.server = grpc.server(futures.ThreadPoolExecutor(max_workers=prefs.get_server_pool_max_threads()),

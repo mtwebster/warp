@@ -27,6 +27,7 @@ libexec_py = [
   'notifications.py',
   'ops.py',
   'prefs.py',
+  'qr.py',
   'remote.py',
   'remote_registration.py',
   'server.py',

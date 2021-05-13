@@ -208,7 +208,8 @@ class RemoteMachine(GObject.Object):
                 ('grpc.keepalive_permit_without_calls', True),
                 ('grpc.http2.max_pings_without_data', 0),
                 ('grpc.http2.min_time_between_pings_ms', 10000),
-                ('grpc.http2.min_ping_interval_without_data_ms', 5000)
+                ('grpc.http2.min_ping_interval_without_data_ms', 5000),
+                ('grpc.tsi.max_frame_size', 1024 * 1024)
             )
 
             with grpc.secure_channel("%s:%d" % (self.ips, self.port), creds, options=opts) as channel:

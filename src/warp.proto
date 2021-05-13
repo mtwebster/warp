@@ -85,6 +85,7 @@ message FileChunk {
 
 service WarpRegistration {
     rpc RequestCertificate(RegRequest) returns (RegResponse) {}
+    rpc StaticRegistration(StaticRegInfo) returns (StaticRegInfo) {}
 }
 
 message RegRequest {
@@ -94,4 +95,8 @@ message RegRequest {
 
 message RegResponse {
     string locked_cert = 1;
+}
+
+message StaticRegInfo {
+
 }
