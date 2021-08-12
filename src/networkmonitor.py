@@ -30,14 +30,21 @@ class NetworkMonitor(GObject.Object):
     def __init__(self):
         GObject.Object.__init__(self)
         self.online = False
+
         self.current_ip = None
+        self.current_iface_setting = None
+        self.current_ip_info = None
 
         self.timer_id = 0
-        self.current_ip_info = None
 
         prefs.prefs_settings.connect("changed", self.on_prefs_changed)
 
     def on_prefs_changed(self, settings, key, data=None):
+        if key not in ("preferred-network-iface",
+                       "port",
+                       "reg-port"):
+            return
+        print("key", key)
         self.stop()
         self.start()
 
@@ -62,28 +69,29 @@ class NetworkMonitor(GObject.Object):
         return GLib.SOURCE_CONTINUE
 
     def _update_online(self):
-        preferred = prefs.get_preferred_iface()
-        available = self.get_valid_interface_infos()
-
+        new_iface_setting = prefs.get_preferred_iface()
         new_ip_info = None
         new_online = False
 
-        if preferred == "auto" and len(available) > 0:
+        available = self.get_valid_interface_infos()
+
+        if new_iface_setting == "auto" and len(available) > 0:
             new_ip_info = self.get_default_interface_info()
             new_online = True
         for info in available:
-            if info.iface == preferred:
+            if info.iface == new_iface_setting:
                 new_ip_info = info
                 new_online = True
 
         if new_ip_info == None:
-            new_ip_info = util.InterfaceInfo({ "addr": "0.0.0.0" }, { "addr": "0:0:0:0::0" }, preferred)
+            new_ip_info = util.InterfaceInfo({ "addr": "0.0.0.0" }, { "addr": "[::]" }, new_iface_setting)
 
         self.current_ip_info = new_ip_info
 
-        if new_online != self.online or self.current_ip_info != new_ip_info:
+        if new_online != self.online or self.current_ip_info != new_ip_info or self.current_iface_setting != new_iface_setting:
             self.current_ip_info = new_ip_info
             self.online = new_online
+            self.current_iface_setting = new_iface_setting
             self.emit_state_changed()
 
     def get_valid_interface_infos(self):

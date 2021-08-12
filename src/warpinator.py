@@ -1079,7 +1079,10 @@ class WarpApplication(Gtk.Application):
         self.current_auth_port = prefs.get_auth_port()
         self.current_ip_info = self.netmon.get_current_ip_info()
 
-        logging.debug("New server requested for '%s' (%s)", self.current_ip_info.iface, self.current_ip_info.ip4_address)
+        if prefs.connect_to_any():
+            logging.debug("New multicast server requested")
+        else:
+            logging.debug("New server requested for '%s' (%s)", self.current_ip_info.iface, self.current_ip_info.ip4_address)
 
         self.window.update_local_user_info(self.current_ip_info.ip4_address, self.current_ip_info.iface)
 
