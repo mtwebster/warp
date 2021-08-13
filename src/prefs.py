@@ -57,9 +57,6 @@ if prefs_settings.get_int(PORT_KEY) == prefs_settings.get_int(REG_PORT_KEY):
 def get_preferred_iface():
     return prefs_settings.get_string(NET_IFACE)
 
-def connect_to_any():
-    return get_preferred_iface() == "auto"
-
 def get_port():
     return prefs_settings.get_int(PORT_KEY)
 

@@ -99,9 +99,15 @@ class InterfaceInfo():
         blist = []
 
         if self.ip4:
-            blist.append(socket.inet_pton(GLib.SYSDEF_AF_INET, self.ip4_address))
+            try:
+                blist.append(socket.inet_pton(GLib.SYSDEF_AF_INET, self.ip4_address))
+            except:
+                pass
         if self.ip6:
-            blist.append(socket.inet_pton(GLib.SYSDEF_AF_INET6, self.ip6_address))
+            try:
+                blist.append(socket.inet_pton(GLib.SYSDEF_AF_INET6, self.ip6_address))
+            except:
+                pass
 
         return blist
 

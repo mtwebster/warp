@@ -28,7 +28,7 @@ from util import TransferDirection, OpStatus, RemoteStatus
 
 try:
     import zeroconf_
-    from zeroconf_ import ServiceInfo, Zeroconf, ServiceBrowser, InterfaceChoice
+    from zeroconf_ import ServiceInfo, Zeroconf, ServiceBrowser
 except:
     import zeroconf
 
@@ -92,9 +92,7 @@ class Server(threading.Thread, warp_pb2_grpc.WarpServicer, GObject.Object):
         except:
             logging.info("Using system zeroconf v%s" % zeroconf.__version__)
 
-        multicast = prefs.connect_to_any()
-
-        self.zeroconf = Zeroconf(interfaces=InterfaceChoice.All if multicast else [str(self.ip_info.ip4_address)])
+        self.zeroconf = Zeroconf(interfaces=[self.ip_info.ip4_address])
 
         self.service_ident = auth.get_singleton().get_ident()
         self.service_name = "%s.%s" % (self.service_ident, SERVICE_TYPE)
@@ -128,7 +126,7 @@ class Server(threading.Thread, warp_pb2_grpc.WarpServicer, GObject.Object):
                                              'type': 'real' })
 
         self.zeroconf.register_service(self.info)
-        self.browser = ServiceBrowser(self.zeroconf, SERVICE_TYPE, self, addr=None if multicast else self.ip_info.ip4_address)
+        self.browser = ServiceBrowser(self.zeroconf, SERVICE_TYPE, self, addr=self.ip_info.ip4_address)
 
         return False
 
@@ -194,7 +192,7 @@ class Server(threading.Thread, warp_pb2_grpc.WarpServicer, GObject.Object):
 
             # FIXME: I'm not sure why we still get discovered by other networks in some cases -
             # The Zeroconf object has a specific ip it is set to, what more do I need to do?
-            if (not self.netmon.same_subnet(remote_ip_info)) and (not prefs.connect_to_any()):
+            if not self.netmon.same_subnet(remote_ip_info):
                 logging.debug(">>> Discovery: service is not on this subnet, ignoring: %s (%s)" % (remote_hostname, remote_ip_info.ip4_address))
                 return
 
@@ -277,10 +275,10 @@ class Server(threading.Thread, warp_pb2_grpc.WarpServicer, GObject.Object):
             machine.start_remote_thread()
 
     def run(self):
-        logging.debug("Server: starting server on %s (%s)" % \
-                          ("<multicast>" if prefs.connect_to_any() else self.ip_info.ip4_address, self.ip_info.iface))
+        logging.debug("Server: starting server on %s (%s)" % (self.ip_info.ip4_address, self.ip_info.iface))
         logging.info("Using api version %s" % config.RPC_API_VERSION)
         logging.info("Our uuid: %s" % auth.get_singleton().get_ident())
+
 
         self.remote_registrar = remote_registration.Registrar(self.ip_info, self.port, self.auth_port)
         util.initialize_rpc_threadpool()
@@ -302,10 +300,9 @@ class Server(threading.Thread, warp_pb2_grpc.WarpServicer, GObject.Object):
         pair = auth.get_singleton().get_server_creds()
         server_credentials = grpc.ssl_server_credentials((pair,))
 
-        address = "0.0.0.0" if prefs.connect_to_any() else self.ip_info.ip4_address
-
-        self.server.add_secure_port('%s:%d' % (address, self.port),
-                                    server_credentials)
+        if self.ip_info.ip4_address:
+            self.server.add_secure_port('%s:%d' % (self.ip_info.ip4_address, self.port),
+                                        server_credentials)
         # if self.ip_info.ip6_address:
         #     self.server.add_secure_port('%s:%d' % (self.ip_info.ip6_address, self.port),
         #                                 server_credentials)

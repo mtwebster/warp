@@ -289,9 +289,7 @@ class RegistrationServer_v2():
         self.server = grpc.server(futures.ThreadPoolExecutor(max_workers=2))
         warp_pb2_grpc.add_WarpRegistrationServicer_to_server(self, self.server)
 
-        address = "0.0.0.0" if prefs.connect_to_any() else self.ip_info.ip4_address
-
-        self.server.add_insecure_port('%s:%d' % (address, self.auth_port))
+        self.server.add_insecure_port('%s:%d' % (self.ip_info.ip4_address, self.auth_port))
         self.server.start()
 
         while not self.server_thread_keepalive.is_set():
