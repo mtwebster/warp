@@ -203,14 +203,15 @@ class FileReceiver(GObject.Object):
             self.current_mtime = s.time.mtime
             self.current_mtime_usec = s.time.mtime_usec
 
+        if not self.current_gfile:
+            self.current_gfile = Gio.File.new_for_path(path)
+
         if s.file_type == FileType.DIRECTORY:
             os.makedirs(path, mode=s.file_mode if (s.file_mode > 0) else 0o777, exist_ok=True)
         elif s.file_type == FileType.SYMBOLIC_LINK:
             make_symbolic_link(self.op, path, s.symlink_target)
         else:
-            if not self.current_gfile:
-                self.current_gfile = Gio.File.new_for_path(path)
-
+            if self.current_stream == None:
                 flags = Gio.FileCreateFlags.REPLACE_DESTINATION
                 self.current_stream = self.current_gfile.replace(None, False, flags, None)
 
@@ -221,11 +222,15 @@ class FileReceiver(GObject.Object):
             self.op.progress_tracker.update_progress(len(s.chunk))
 
     def close_current_file(self):
+        if self.current_gfile == None:
+            # First block received we self.close_current_file() with an empty path.
+            return
+
         if self.current_stream:
             self.current_stream.close()
             self.current_stream = None
 
-        print("received tiem obj : %lu.%u" % (self.current_mtime, self.current_mtime_usec))
+        print("received tiem obj : %lu.%u --- %s" % (self.current_mtime, self.current_mtime_usec, self.current_path))
         if self.preserve_timestamp and self.current_mtime > 0:
             info = Gio.FileInfo.new()
             print("setting time: %lu.%u" % (self.current_mtime, self.current_mtime_usec))
