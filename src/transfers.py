@@ -94,7 +94,7 @@ class FileSender(GObject.Object):
 
             ftime = warp_pb2.FileTime(mtime=file.mtime,
                                       mtime_usec = file.mtime_usec)
-            print("getting time: %lu.%u" % (file.mtime, file.mtime_usec))
+            print("getting time: %lu.%u ---- %s" % (file.mtime, file.mtime_usec, file.relative_path))
             if file.file_type == FileType.DIRECTORY:
                 yield warp_pb2.FileChunk(relative_path=file.relative_path,
                                          file_type=file.file_type,
@@ -165,6 +165,7 @@ class FileReceiver(GObject.Object):
         self.save_path = prefs.get_save_path()
         self.op = op
         self.preserve_perms = prefs.preserve_permissions() and util.save_folder_is_native_fs()
+        self.preserve_timestamp = prefs.preserve_timestamp() and util.save_folder_is_native_fs()
 
         self.current_path = None
         self.current_gfile = None
@@ -172,7 +173,6 @@ class FileReceiver(GObject.Object):
         self.current_mode = 0
         self.current_mtime = 0
         self.current_mtime_usec = 0
-        self.preserve_timestamp = prefs.preserve_timestamp()
 
         if op.existing:
             for name in op.top_dir_basenames:
@@ -225,21 +225,25 @@ class FileReceiver(GObject.Object):
             self.current_stream.close()
             self.current_stream = None
 
-            print("received tiem obj : %lu.%u" % (self.current_mtime, self.current_mtime_usec))
-            if self.preserve_timestamp and self.current_mtime > 0:
-                info = Gio.FileInfo.new()
-                print("setting time: %lu.%u" % (self.current_mtime, self.current_mtime_usec))
-                info.set_attribute_uint64(Gio.FILE_ATTRIBUTE_TIME_MODIFIED, self.current_mtime)
-                info.set_attribute_uint32(Gio.FILE_ATTRIBUTE_TIME_MODIFIED_USEC, self.current_mtime_usec)
-                try:
-                    self.current_gfile.set_attributes_from_info(info, Gio.FileQueryInfoFlags.NONE, None)
-                except GLib.Error:
-                    pass
+        print("received tiem obj : %lu.%u" % (self.current_mtime, self.current_mtime_usec))
+        if self.preserve_timestamp and self.current_mtime > 0:
+            info = Gio.FileInfo.new()
+            print("setting time: %lu.%u" % (self.current_mtime, self.current_mtime_usec))
+            info.set_attribute_uint64(Gio.FILE_ATTRIBUTE_TIME_MODIFIED, self.current_mtime)
+            info.set_attribute_uint32(Gio.FILE_ATTRIBUTE_TIME_MODIFIED_USEC, self.current_mtime_usec)
+            try:
+                self.current_gfile.set_attributes_from_info(info, Gio.FileQueryInfoFlags.NONE, None)
+            except GLib.Error:
+                pass
+            self.current_mtime = 0
+            self.current_mtime_usec = 0
 
-            if self.preserve_perms and self.current_mode > 0:
-                os.chmod(self.current_path, mode=self.current_mode)
+        if self.preserve_perms and self.current_mode > 0:
+            os.chmod(self.current_path, mode=self.current_mode)
 
-            self.current_gfile = None
+        self.current_mode = 0
+        self.current_path = None
+        self.current_gfile = None
 
     def apply_folder_permissions(self):
         if self.preserve_perms:
