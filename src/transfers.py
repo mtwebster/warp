@@ -18,6 +18,8 @@ FILE_INFOS = ",".join([
     "standard::name",
     "standard::type",
     "standard::symlink-target",
+    "time::modified",
+    "time::modified-usec",
     "unix::mode"
 ])
 
@@ -28,6 +30,8 @@ FILE_INFOS_SINGLE_FILE = ",".join([
     "standard::type",
     "standard::symlink-target",
     "standard::content-type",
+    "time::modified",
+    "time::modified-usec",
     "unix::mode"
 ])
 
@@ -62,7 +66,7 @@ def make_symbolic_link(op, path, target):
 
 # This represents a file to be transferred (this is used by the sender)
 class File:
-    def __init__(self, uri, basename, rel_path, size, file_type, symlink_target=None, file_mode=0):
+    def __init__(self, uri, basename, rel_path, size, file_type, symlink_target=None, file_mode=0, mtime=0, mtime_usec=0):
         self.uri = uri
         self.basename = basename
         self.relative_path = rel_path
@@ -70,6 +74,8 @@ class File:
         self.file_type = file_type
         self.symlink_target = symlink_target
         self.file_mode = file_mode
+        self.mtime = mtime
+        self.mtime_usec = mtime_usec
 
 class FileSender(GObject.Object):
     def __init__(self, op, timestamp, cancellable):
@@ -86,15 +92,20 @@ class FileSender(GObject.Object):
             if self.cancellable.is_set():
                 return # StopIteration as different behaviors between 3.5 and 3.7, this works as well.
 
+            ftime = warp_pb2.FileTime(mtime=file.mtime,
+                                      mtime_usec = file.mtime_usec)
+            print("getting time: %lu.%u" % (file.mtime, file.mtime_usec))
             if file.file_type == FileType.DIRECTORY:
                 yield warp_pb2.FileChunk(relative_path=file.relative_path,
                                          file_type=file.file_type,
-                                         file_mode=file.file_mode)
+                                         file_mode=file.file_mode,
+                                         time=ftime)
             elif file.file_type == FileType.SYMBOLIC_LINK:
                 yield warp_pb2.FileChunk(relative_path=file.relative_path,
                                          file_type=file.file_type,
                                          symlink_target=file.symlink_target,
-                                         file_mode=file.file_mode)
+                                         file_mode=file.file_mode,
+                                         time=ftime)
             else:
                 stream = None
 
@@ -103,6 +114,7 @@ class FileSender(GObject.Object):
                     stream = gfile.read(None)
 
                     file_done = False
+                    first_chunk = True
 
                     while True:
                         if file_done:
@@ -119,10 +131,17 @@ class FileSender(GObject.Object):
 
                         self.op.progress_tracker.update_progress(last_size_read)
 
+                        if first_chunk:
+                            time = ftime
+                            first_chunk = False
+                        else:
+                            time = None
+
                         yield warp_pb2.FileChunk(relative_path=file.relative_path,
                                                  file_type=file.file_type,
                                                  chunk=b.get_data(),
-                                                 file_mode=file.file_mode)
+                                                 file_mode=file.file_mode,
+                                                 time=time)
 
                     stream.close()
                     continue
@@ -140,7 +159,6 @@ class FileSender(GObject.Object):
 
         self.op.progress_tracker.finished()
 
-
 class FileReceiver(GObject.Object):
     def __init__(self, op):
         super(FileReceiver, self).__init__()
@@ -152,6 +170,8 @@ class FileReceiver(GObject.Object):
         self.current_gfile = None
         self.current_stream = None
         self.current_mode = 0
+        self.current_mtime = 0
+        self.current_mtime_usec = 0
 
         if op.existing:
             for name in op.top_dir_basenames:
@@ -179,6 +199,8 @@ class FileReceiver(GObject.Object):
             self.close_current_file()
             self.current_path = path
             self.current_mode = s.file_mode
+            self.current_mtime = s.time.mtime
+            self.current_time = s.time.mtime_usec
 
         if s.file_type == FileType.DIRECTORY:
             os.makedirs(path, mode=s.file_mode if (s.file_mode > 0) else 0o777, exist_ok=True)
@@ -201,9 +223,22 @@ class FileReceiver(GObject.Object):
         if self.current_stream:
             self.current_stream.close()
             self.current_stream = None
-            self.current_gfile = None
+
+            print("received tiem obj : %lu.%u" % (self.current_mtime, self.current_mtime_usec))
+            if self.current_mtime > 0:
+                info = Gio.FileInfo.new()
+                print("setting time: %lu.%u" % (self.current_mtime, self.current_mtime_usec))
+                info.set_attribute_uint64("time::modified", self.current_mtime)
+                info.set_attribute_uint32("time::modified-usec", self.current_mtime_usec)
+                try:
+                    self.current_gfile.set_attributes_from_info(info, Gio.FileQueryInfoFlags.NONE, None)
+                except GLib.Error:
+                    pass
+
             if self.preserve_perms and self.current_mode > 0:
                 os.chmod(self.current_path, mode=self.current_mode)
+
+            self.current_gfile = None
 
     def apply_folder_permissions(self):
         if self.preserve_perms:
@@ -244,7 +279,10 @@ def add_file(op, basename, uri, base_uri, info):
     else:
         relative_path = basename
 
-    file = File(uri, basename, relative_path, size, file_type, symlink_target, file_mode)
+    mtime = info.get_attribute_uint64("time::modified")
+    mtime_usec = info.get_attribute_uint32("time::modified-usec")
+
+    file = File(uri, basename, relative_path, size, file_type, symlink_target, file_mode, mtime, mtime_usec)
 
     op.resolved_files.append(file)
     op.total_size += size
