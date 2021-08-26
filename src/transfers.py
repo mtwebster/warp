@@ -172,6 +172,7 @@ class FileReceiver(GObject.Object):
         self.current_mode = 0
         self.current_mtime = 0
         self.current_mtime_usec = 0
+        self.preserve_timestamp = prefs.preserve_timestamp()
 
         if op.existing:
             for name in op.top_dir_basenames:
@@ -200,7 +201,7 @@ class FileReceiver(GObject.Object):
             self.current_path = path
             self.current_mode = s.file_mode
             self.current_mtime = s.time.mtime
-            self.current_time = s.time.mtime_usec
+            self.current_mtime_usec = s.time.mtime_usec
 
         if s.file_type == FileType.DIRECTORY:
             os.makedirs(path, mode=s.file_mode if (s.file_mode > 0) else 0o777, exist_ok=True)
@@ -225,11 +226,11 @@ class FileReceiver(GObject.Object):
             self.current_stream = None
 
             print("received tiem obj : %lu.%u" % (self.current_mtime, self.current_mtime_usec))
-            if self.current_mtime > 0:
+            if self.preserve_timestamp and self.current_mtime > 0:
                 info = Gio.FileInfo.new()
                 print("setting time: %lu.%u" % (self.current_mtime, self.current_mtime_usec))
-                info.set_attribute_uint64("time::modified", self.current_mtime)
-                info.set_attribute_uint32("time::modified-usec", self.current_mtime_usec)
+                info.set_attribute_uint64(Gio.FILE_ATTRIBUTE_TIME_MODIFIED, self.current_mtime)
+                info.set_attribute_uint32(Gio.FILE_ATTRIBUTE_TIME_MODIFIED_USEC, self.current_mtime_usec)
                 try:
                     self.current_gfile.set_attributes_from_info(info, Gio.FileQueryInfoFlags.NONE, None)
                 except GLib.Error:
@@ -279,8 +280,8 @@ def add_file(op, basename, uri, base_uri, info):
     else:
         relative_path = basename
 
-    mtime = info.get_attribute_uint64("time::modified")
-    mtime_usec = info.get_attribute_uint32("time::modified-usec")
+    mtime = info.get_attribute_uint64(Gio.FILE_ATTRIBUTE_TIME_MODIFIED)
+    mtime_usec = info.get_attribute_uint32(Gio.FILE_ATTRIBUTE_TIME_MODIFIED_USEC)
 
     file = File(uri, basename, relative_path, size, file_type, symlink_target, file_mode, mtime, mtime_usec)
 
