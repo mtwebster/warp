@@ -38,10 +38,10 @@ class NewOpUserNotification():
                 notification.set_icon(Gio.ThemedIcon(name="org.x.Warpinator-symbolic"))
 
                 # Cinnamon (possibly others) doesn't currently support org.freedesktop.portal.Notification.
-                if not config.FLATPAK_BUILD:
-                    notification.add_button(_("Accept"), "app.notification-response::accept")
-                    notification.add_button(_("Decline"), "app.notification-response::decline")
-                    notification.set_default_action("app.notification-response::focus")
+                # if not config.FLATPAK_BUILD:
+                notification.add_button(_("Accept"), "app.notification-response::accept")
+                notification.add_button(_("Decline"), "app.notification-response::decline")
+                notification.set_default_action("app.notification-response::focus")
 
                 notification.set_priority(Gio.NotificationPriority.URGENT)
 
