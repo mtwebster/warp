@@ -235,24 +235,21 @@ def register_v2(details):
 
     success = False
 
-    while not details.retry_keepalive.is_set():
-        remote_thread = threading.Thread(target=register_with_remote_thread, args=(details,), name="remote-auth-thread-%s" % id)
-        logging.debug("remote-registration-thread-%s-%s:%d-%s" % (details.hostname, details.ip_info.ip4_address, details.auth_port, details.ident))
-        remote_thread.start()
-        remote_thread.join()
+    remote_thread = threading.Thread(target=register_with_remote_thread, args=(details,), name="remote-auth-thread-%s" % id)
+    logging.debug("remote-registration-thread-%s-%s:%d-%s" % (details.hostname, details.ip_info.ip4_address, details.auth_port, details.ident))
+    remote_thread.start()
+    remote_thread.join()
 
-        if details.locked_cert != None:
-            success = auth.get_singleton().process_remote_cert(details.hostname,
-                                                               details.ip_info,
-                                                               details.locked_cert)
+    if details.locked_cert != None:
+        success = auth.get_singleton().process_remote_cert(details.hostname,
+                                                           details.ip_info,
+                                                           details.locked_cert)
 
-        if not success:
-            logging.critical("Unable to register with %s (%s:%d) - api version 2"
-                                 % (details.hostname, details.ip_info.ip4_address, details.auth_port))
-            details.retry_keepalive.wait(10)
-        else:
-            details.retry_keepalive.set()
-    return True
+    if not success:
+        logging.critical("Unable to register with %s (%s:%d) - api version 2"
+                             % (details.hostname, details.ip_info.ip4_address, details.auth_port))
+
+    return success
 
 def register_with_remote_thread(details):
     logging.debug("Remote: Attempting to register %s (%s)" % (details.hostname, details.ip_info.ip4_address))
