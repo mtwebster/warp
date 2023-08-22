@@ -53,11 +53,22 @@ if include_firewall_mod
     subdir('firewall')
 endif
 
+
+install_libdir = join_paths(get_option('prefix'), get_option('libexecdir'), 'warpinator')
+install_bindir = join_paths(get_option('prefix'), get_option('bindir'))
+
+meson_source_root = meson.current_source_dir()
+
+
 if bundle_grpc
-    install_subdir(
-        'grpc-py310-x86_64',
-        install_dir: join_paths(install_libdir, 'grpc'),
-        strip_directory: true
+    setup = join_paths(meson_source_root, 'grpcio-1.44.0', 'build_script.py')
+
+    grpc = custom_target('grpc_build',
+        output: 'grpc',
+        command: [setup, join_paths(meson_source_root, 'grpcio-1.44.0'), join_paths(meson.current_build_dir(), 'grpc')],
+        install: true,
+        install_dir: install_libdir,
+        build_by_default: true
     )
 endif
 
