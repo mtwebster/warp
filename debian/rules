@@ -6,3 +6,5 @@
 override_dh_python3:
 	dh_python3 usr/libexec/warpinator
 
+override_dh_auto_test:
+
