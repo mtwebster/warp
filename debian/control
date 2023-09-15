@@ -13,11 +13,12 @@ Build-Depends:
  python3-dev,
  python3-grpc-tools (>= 1.14.0),
  python3-protobuf (>= 3.6.1),
+ python3-setuptools,
  gobject-introspection
 Standards-Version: 3.9.6
 
 Package: warpinator
-Architecture: all
+Architecture: any
 Pre-Depends: ${misc:Pre-Depends}
 Depends:
  gir1.2-glib-2.0,

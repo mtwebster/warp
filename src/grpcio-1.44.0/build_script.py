@@ -11,6 +11,7 @@ print("Building grpc s:%s, t:%s" % (srcdir, outdir))
 
 try:
     os.chdir(srcdir)
+    os.environ["GRPC_PYTHON_BUILD_EXT_COMPILER_JOBS"] = "2"
     subprocess.run(["python3", "setup.py", "build"])
     subprocess.run("cp -r python_build/lib*/grpc %s" % outdir, shell=True)
 except Exception as e:

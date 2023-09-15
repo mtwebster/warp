@@ -10,6 +10,7 @@ pyconf.set('gettext_package', gettext_package)
 pyconf.set('locale_dir', locale_dir)
 pyconf.set('include_firewall_mod', include_firewall_mod)
 pyconf.set('bundle_zeroconf', bundle_zeroconf)
+pyconf.set('bundle_grpc', bundle_grpc)
 pyconf.set('flatpak_build', get_option('flatpak-build'))
 pyconf.set_quoted('RPC_API_VERSION', RPC_API_VERSION)
 
