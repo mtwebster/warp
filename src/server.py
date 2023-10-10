@@ -13,6 +13,7 @@ from gi.repository import GObject, GLib
 import grpc
 import warp_pb2
 import warp_pb2_grpc
+from google import protobuf
 
 import config
 import auth
@@ -279,6 +280,7 @@ class Server(threading.Thread, warp_pb2_grpc.WarpServicer, GObject.Object):
 
     def run(self):
         logging.info("Using grpc version %s %s" % (grpc.__version__, "(bundled)" if config.bundle_grpc else ""))
+        logging.info("Using protobuf version %s %s" % (protobuf.__version__, "(bundled)" if config.bundle_grpc else ""))
         logging.debug("Server: starting server on %s (%s)" % (self.ip_info.ip4_address, self.ip_info.iface))
         logging.info("Using api version %s" % config.RPC_API_VERSION)
         logging.info("Our uuid: %s" % prefs.get_connect_id())
