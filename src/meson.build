@@ -63,12 +63,13 @@ meson_source_root = meson.current_source_dir()
 
 if bundle_grpc
     dependency('python3')
+    current_version = '1.59.0'
 
-    setup = join_paths(meson_source_root, 'grpcio-1.44.0', 'build_script.py')
+    setup = join_paths(meson_source_root, 'grpcio-' + current_version, 'build_script.py')
 
     grpc = custom_target('grpc_build',
         output: 'grpc',
-        command: [setup, join_paths(meson_source_root, 'grpcio-1.44.0'), join_paths(meson.current_build_dir(), 'grpc')],
+        command: [setup, join_paths(meson_source_root, 'grpcio-' + current_version), join_paths(meson.current_build_dir(), 'grpc')],
         install: true,
         install_dir: install_libdir,
         build_by_default: true,
