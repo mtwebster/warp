@@ -39,3 +39,15 @@ Depends:
  ${misc:Depends},
  ${python3:Depends}
 Description: Allows simple local network file sharing.
+
+Package: warpinator-dbg
+Section: debug
+Priority: extra
+Architecture: any
+Depends:
+ warpinator (= ${binary:Version}),
+ ${misc:Depends},
+Description: Allows simple local network file sharing.
+ .
+ This package contains the debugging symbols for the bundled
+ grpcio module.
