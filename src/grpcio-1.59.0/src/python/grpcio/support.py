@@ -18,7 +18,7 @@ import shutil
 import sys
 import tempfile
 
-from setuptools import errors
+from distutils import errors
 
 import commands
 

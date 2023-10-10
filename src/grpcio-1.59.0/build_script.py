@@ -9,6 +9,12 @@ outdir = sys.argv[2]
 
 print("Building grpc s:%s, t:%s" % (srcdir, outdir))
 
+# Modifications to grpc tarball (1.59.0) #################################################################
+
+# grpc/src/python/grpcio/support.py --- setuptools.errors.CompileError does not exist in python < 3.10.
+#                                       replaced with distutils.errors.CompileError.
+##########################################################################################################
+
 try:
     os.chdir(srcdir)
     os.environ["GRPC_PYTHON_BUILD_EXT_COMPILER_JOBS"] = "2"
