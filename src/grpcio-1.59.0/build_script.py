@@ -9,6 +9,14 @@ outdir = sys.argv[2]
 
 print("Building grpc s:%s, t:%s" % (srcdir, outdir))
 
+# Older python versions < 3.10 don't have CompileError.
+# grpc/src/python/grpcio/support.py uses this.
+try:
+    from setuptools.errors import CompileError
+except ImportError:
+    import setuptools.errors
+    setuptools.errors.CompileError = distutils.errors.CompileError
+
 try:
     os.chdir(srcdir)
     os.environ["GRPC_PYTHON_BUILD_EXT_COMPILER_JOBS"] = "2"
