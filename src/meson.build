@@ -10,6 +10,7 @@ pyconf.set('gettext_package', gettext_package)
 pyconf.set('locale_dir', locale_dir)
 pyconf.set('include_firewall_mod', include_firewall_mod)
 pyconf.set('bundle_zeroconf', bundle_zeroconf)
+pyconf.set('bundle_grpc', bundle_grpc)
 pyconf.set('flatpak_build', get_option('flatpak-build'))
 pyconf.set_quoted('RPC_API_VERSION', RPC_API_VERSION)
 
@@ -53,11 +54,25 @@ if include_firewall_mod
     subdir('firewall')
 endif
 
+
+install_libdir = join_paths(get_option('prefix'), get_option('libexecdir'), 'warpinator')
+install_bindir = join_paths(get_option('prefix'), get_option('bindir'))
+
+meson_source_root = meson.current_source_dir()
+
+
 if bundle_grpc
-    install_subdir(
-        'grpc-py310-x86_64',
-        install_dir: join_paths(install_libdir, 'grpc'),
-        strip_directory: true
+    dependency('python3')
+    current_grpc_version = '1.59.0'
+
+    setup = join_paths(meson_source_root, 'grpcio-' + current_grpc_version, 'build_script.py')
+
+    grpc = custom_target('grpc_build',
+        output: 'grpc',
+        command: [setup, join_paths(meson_source_root, 'grpcio-' + current_grpc_version), join_paths(meson.current_build_dir(), 'grpc')],
+        install: true,
+        install_dir: install_libdir,
+        build_by_default: true,
     )
 endif
 
