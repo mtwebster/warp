@@ -152,11 +152,19 @@ class Server(warp_pb2_grpc.WarpServicer, GObject.Object):
         if self.ip_info.ip6_address is not None:
             self.browser6 = AsyncServiceBrowser(self.aiozc.zeroconf, SERVICE_TYPE, listener=self, addr=self.ip_info.ip6_address)
 
-    # Will be mandatory eventually, this will have to be here even if we don't care about it.
-    async def update_service(self, zeroconf, _type, name):
+    # AsyncServiceBrowser's listener dispatcher invokes these as regular
+    # callables — it doesn't await coroutines. Keep them sync and fan out the
+    # actual work as asyncio tasks on the running loop.
+    def update_service(self, zeroconf, _type, name):
         pass
 
-    async def remove_service(self, zeroconf, _type, name):
+    def remove_service(self, zeroconf, _type, name):
+        asyncio.create_task(self._on_remove_service(zeroconf, _type, name))
+
+    def add_service(self, zeroconf, _type, name):
+        asyncio.create_task(self._on_add_service(zeroconf, _type, name))
+
+    async def _on_remove_service(self, zeroconf, _type, name):
         if name == self.service_name:
             return
 
@@ -173,7 +181,7 @@ class Server(warp_pb2_grpc.WarpServicer, GObject.Object):
 
         r.has_zc_presence = False
 
-    async def add_service(self, zeroconf, _type, name):
+    async def _on_add_service(self, zeroconf, _type, name):
         async with self.browser_mutex:
             info = AsyncServiceInfo(_type, name)
             if not await info.async_request(self.aiozc.zeroconf, 3000):

@@ -1864,11 +1864,17 @@ def install_asyncio_glib_policy():
     # (Mint 22 / Ubuntu 24.04 LTS still ship 3.48), python3-gbulb provides the
     # same integration. Once a target distro reaches PyGObject 3.50, gbulb can
     # be dropped from debian/control.
+    #
+    # Returns a callable: run_app(app, argv) -> int.
     try:
         from gi.events import GLibEventLoopPolicy
         asyncio.set_event_loop_policy(GLibEventLoopPolicy())
         logging.info("asyncio: using gi.events.GLibEventLoopPolicy (PyGObject native)")
-        return
+        # Native integration sets the asyncio running-loop state automatically
+        # while GLib iterates the main context, so app.run() works directly.
+        def run_app(app, argv):
+            return app.run(argv)
+        return run_app
     except ImportError:
         pass
 
@@ -1876,7 +1882,22 @@ def install_asyncio_glib_policy():
         import gbulb
         gbulb.install(gtk=True)
         logging.info("asyncio: using gbulb fallback (PyGObject < 3.50)")
-        return
+        # gbulb only marks the asyncio loop as "running" inside its own loop.run()
+        # method. We MUST drive the Gtk.Application through gbulb's run() rather
+        # than calling app.run() directly — otherwise asyncio.get_running_loop()
+        # raises RuntimeError inside our coroutines, and bundled zeroconf
+        # (AsyncZeroconf) falls back to spawning its own loop thread, which
+        # deadlocks fighting for GLib.main_context_default().
+        def run_app(app, argv):
+            loop = asyncio.get_event_loop()
+            loop.set_application(app)
+            loop.set_argv(argv)
+            try:
+                loop.run()
+            except KeyboardInterrupt:
+                pass
+            return 0
+        return run_app
     except ImportError:
         pass
 
@@ -1894,14 +1915,14 @@ def main(testing=False):
     except KeyError as e:
         pass
 
-    install_asyncio_glib_policy()
+    run_app = install_asyncio_glib_policy()
 
     try:
         w = WarpApplication(testing)
         signal.signal(signal.SIGINT, lambda s, f: w.exit_warp())
         signal.signal(signal.SIGTERM, lambda s, f: w.exit_warp())
 
-        ret = w.run(sys.argv)
+        ret = run_app(w, sys.argv)
 
         if w.app_restarting:
             ret = misc.EXIT_CODE_RESTART_BWRAP
