@@ -1,11 +1,12 @@
 #!/usr/bin/python3
 
+import asyncio
 import logging
 import threading
 import socket
-from concurrent import futures
 
 import grpc
+import grpc.aio
 import warp_pb2_grpc
 import warp_pb2
 
@@ -13,6 +14,7 @@ import auth
 import util
 import prefs
 import config
+
 
 class RegRequest():
     def __init__(self, ident, hostname, ip_info, port, auth_port, api_version):
@@ -22,10 +24,10 @@ class RegRequest():
         self.ip_info = ip_info
         self.port = port
 
-        #v1 only
+        # v1 only
         self.request = None
 
-        #v2 only
+        # v2 only
         self.auth_port = auth_port
         self.locked_cert = None
 
@@ -34,8 +36,9 @@ class RegRequest():
     def cancel(self):
         self.cancelled = True
 
+
 class Registrar():
-    def __init__(self, ip_info, port, auth_port):
+    def __init__(self, ip_info, port, auth_port, loop):
         self.reg_server_v1 = None
         self.reg_server_v2 = None
         self.active_registrations = {}
@@ -44,23 +47,19 @@ class Registrar():
         self.ip_info = ip_info
         self.port = port
         self.auth_port = auth_port
+        self._loop = loop
 
-        self.start_registration_servers()
-
-    def start_registration_servers(self):
-        if self.reg_server_v1 is not None:
-            self.reg_server_v1.stop()
-
-        if self.reg_server_v2 is not None:
-            self.reg_server_v2.stop(grace=2).wait()
-            self.reg_server_v2 = None
-
+        # v1 is UDP sockets in threads; spin up immediately.
+        # v2 is grpc.aio; instantiate now (no I/O), the caller awaits start().
         logging.debug("Starting v1 registration server (%s) with port %d" % (self.ip_info, self.port))
         self.reg_server_v1 = RegistrationServer_v1(self.ip_info, self.port)
         logging.debug("Starting v2 registration server (%s) with auth port %d" % (self.ip_info, self.auth_port))
         self.reg_server_v2 = RegistrationServer_v2(self.ip_info, self.auth_port)
 
-    def shutdown_registration_servers(self):
+    async def start(self):
+        await self.reg_server_v2.start()
+
+    async def shutdown_registration_servers(self):
         with self.reg_lock:
             for key in self.active_registrations.keys():
                 self.active_registrations[key].cancel()
@@ -71,33 +70,50 @@ class Registrar():
             self.reg_server_v1.stop()
             self.reg_server_v1 = None
 
-        if self.reg_server_v2:
+        if self.reg_server_v2 is not None:
             logging.debug("Stopping v2 registration server.")
-            self.reg_server_v2.stop()
+            await self.reg_server_v2.stop()
             self.reg_server_v2 = None
 
-    def register(self, ident, hostname, ip_info, port, auth_port, api_version):
+    async def register_async(self, ident, hostname, ip_info, port, auth_port, api_version):
+        # Async core. Callable directly from coroutines on self._loop.
         details = RegRequest(ident, hostname, ip_info, port, auth_port, api_version)
         with self.reg_lock:
             self.active_registrations[ident] = details
 
         ret = None
 
-        if api_version == "1":
-            ret = register_v1(details)
-        elif api_version == "2":
-            ret = register_v2(details)
-
-        with self.reg_lock:
-            # shutdown_registration_servers may have been called on a different thread.
-            try:
-                del self.active_registrations[ident]
-            except KeyError:
-                pass
+        try:
+            if api_version == "1":
+                # v1 cert exchange is blocking UDP socket I/O.
+                ret = await asyncio.to_thread(register_v1, details)
+            elif api_version == "2":
+                ret = await register_v2(details)
+        finally:
+            with self.reg_lock:
+                try:
+                    del self.active_registrations[ident]
+                except KeyError:
+                    pass
 
         return ret
 
-####################### api v1
+    def register(self, ident, hostname, ip_info, port, auth_port, api_version):
+        # Sync entry point for foreign-thread callers (kept as a convenience).
+        # Loop-thread callers must use register_async() to avoid deadlocking on
+        # run_coroutine_threadsafe(...).result().
+        future = asyncio.run_coroutine_threadsafe(
+            self.register_async(ident, hostname, ip_info, port, auth_port, api_version),
+            self._loop,
+        )
+        try:
+            return future.result()
+        except Exception as e:
+            logging.critical("Registrar.register: coroutine failed: %s" % e)
+            return util.CertProcessingResult.FAILURE
+
+
+# ====================== api v1 ======================
 
 def register_v1(details):
     # This will block if the remote's warp udp port is closed, until either the port is unblocked
@@ -115,6 +131,7 @@ def register_v1(details):
 
     return True
 
+
 def retrieve_remote_cert(details):
     logging.debug("Auth: Starting a new RequestLoop for '%s' (%s:%d)" % (details.hostname, details.ip_info, details.port))
 
@@ -128,9 +145,11 @@ def retrieve_remote_cert(details):
                                                     details.ip_info,
                                                     data)
 
+
 REQUEST = b"REQUEST"
 
-#v1 client
+
+# v1 client
 class Request():
     def __init__(self, ip_info, port):
         self.ip_info = ip_info
@@ -158,6 +177,7 @@ class Request():
             logging.critical("Something wrong with cert request (%s:%s): " % (remote_ip, self.port, e))
 
         return None
+
 
 # v1 server
 class RegistrationServer_v1():
@@ -194,7 +214,7 @@ class RegistrationServer_v1():
                     if data == REQUEST:
                         cert_data = auth.get_singleton().get_encoded_local_cert()
                         server_sock.sendto(cert_data, address)
-                except socket.timeout as e:
+                except socket.timeout:
                     if self.exit:
                         server_sock.close()
                         break
@@ -205,22 +225,14 @@ class RegistrationServer_v1():
         self.thread6.join()
 
 
-####################### api v2
+# ====================== api v2 ======================
 
-
-def register_v2(details):
-    # This will block if the remote's warp udp port is closed, until either the port is unblocked
-    # or we tell the auth object to shutdown, in which case the request timer will cancel and return
-    # here immediately (with None)
+async def register_v2(details):
     logging.debug("Registering with %s (%s:%d) - api version 2" % (details.hostname, details.ip_info, details.auth_port))
 
+    await register_with_remote(details)
+
     success = None
-
-    remote_thread = threading.Thread(target=register_with_remote_thread, args=(details,), name="remote-auth-thread-%s" % id)
-    logging.debug("remote-registration-thread-%s-%s:%d-%s" % (details.hostname, details.ip_info, details.auth_port, details.ident))
-    remote_thread.start()
-    remote_thread.join()
-
     if details.locked_cert is not None and not details.cancelled:
         success = auth.get_singleton().process_remote_cert(details.hostname,
                                                            details.ip_info,
@@ -240,68 +252,61 @@ def register_v2(details):
                              % (details.hostname, details.ip_info, details.auth_port))
     return success
 
-def register_with_remote_thread(details):
+
+async def register_with_remote(details):
     logging.debug("Remote: Attempting to register %s (%s)" % (details.hostname, details.ip_info))
 
     remote_ip, local_ip, ip_version = details.ip_info.get_usable_ip()
     remote_ip = remote_ip if ip_version == socket.AF_INET else "[%s]" % (remote_ip,)
 
-    with grpc.insecure_channel("%s:%d" % (remote_ip, details.auth_port)) as channel:
-        future = grpc.channel_ready_future(channel)
-
+    async with grpc.aio.insecure_channel("%s:%d" % (remote_ip, details.auth_port)) as channel:
         try:
-            # future.result(timeout=5)
             stub = warp_pb2_grpc.WarpRegistrationStub(channel)
-
-            ret = stub.RequestCertificate(warp_pb2.RegRequest(ip=remote_ip, hostname=util.get_hostname()),
-                                          timeout=5)
+            ret = await asyncio.wait_for(
+                stub.RequestCertificate(warp_pb2.RegRequest(ip=remote_ip, hostname=util.get_hostname())),
+                timeout=5,
+            )
             details.locked_cert = ret.locked_cert.encode("utf-8")
         except Exception as e:
-            future.cancel()
-            logging.critical("Problem with remote registration thread: %s (%s:%d) - api version 2: %s"
+            logging.critical("Problem with remote registration: %s (%s:%d) - api version 2: %s"
                      % (details.hostname, details.ip_info, details.auth_port, e))
+
 
 class RegistrationServer_v2():
     def __init__(self, ip_info, auth_port):
-        self.exit = False
         self.ip_info = ip_info
         self.auth_port = auth_port
 
         self.server = None
-        self.server_thread_keepalive = threading.Event()
+        self.service_registration_handler = None
 
-        self.thread = threading.Thread(target=self.serve_cert_thread)
-        self.thread.start()
-
-    def serve_cert_thread(self):
-        self.server = grpc.server(futures.ThreadPoolExecutor(max_workers=2))
+    async def start(self):
+        self.server = grpc.aio.server()
         warp_pb2_grpc.add_WarpRegistrationServicer_to_server(self, self.server)
 
         if self.ip_info.ip4_address is not None:
             self.server.add_insecure_port('%s:%d' % (self.ip_info.ip4_address, self.auth_port))
         if self.ip_info.ip6_address is not None:
             self.server.add_insecure_port('[%s]:%d' % (self.ip_info.ip6_address, self.auth_port))
-        self.server.start()
 
-        while not self.server_thread_keepalive.is_set():
-            self.server_thread_keepalive.wait(10)
+        await self.server.start()
 
-        logging.debug("Registration Server v2 stopping")
-        self.server.stop(grace=2).wait()
-        logging.debug("Registration Server v2 stopped")
+    async def stop(self):
+        if self.server is not None:
+            logging.debug("Registration Server v2 stopping")
+            await self.server.stop(grace=2)
+            logging.debug("Registration Server v2 stopped")
+            self.server = None
 
-    def stop(self):
-        self.server_thread_keepalive.set()
-        self.thread.join()
-
-    def RequestCertificate(self, request, context):
+    async def RequestCertificate(self, request, context):
         logging.debug("Registration Server RPC: RequestCertificate from %s '%s'" % (request.hostname, request.ip))
 
         return warp_pb2.RegResponse(locked_cert=auth.get_singleton().get_encoded_local_cert())
-    
-    def RegisterService(self, reg:warp_pb2.ServiceRegistration, context):
+
+    async def RegisterService(self, reg: warp_pb2.ServiceRegistration, context):
         logging.debug("Received manual registration from " + reg.service_id)
-        self.service_registration_handler(reg)
+        if self.service_registration_handler is not None:
+            await self.service_registration_handler(reg)
         return warp_pb2.ServiceRegistration(service_id=prefs.get_connect_id(),
                                             ip=self.ip_info.ip4_address,
                                             port=prefs.get_port(),
@@ -309,10 +314,3 @@ class RegistrationServer_v2():
                                             api_version=int(config.RPC_API_VERSION),
                                             auth_port=self.auth_port,
                                             ipv6=self.ip_info.ip6_address)
-
-
-
-
-
-
-

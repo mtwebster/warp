@@ -1,5 +1,6 @@
 #!/usr/bin/python3
 
+import asyncio
 import os
 import logging
 import stat
@@ -9,11 +10,17 @@ from pathlib import Path
 
 from gi.repository import GLib, Gio, GObject
 
+import config
 import util
 from util import FileType, ReceiveError
 import prefs
 import misc
 import warp_pb2
+
+try:
+    import landlock
+except Exception:
+    landlock = None
 
 _ = gettext.gettext
 
@@ -44,23 +51,23 @@ MODE_MASK = (stat.S_IRWXU | stat.S_IRWXG | stat.S_IRWXO)
 
 PROGRESS_UPDATE_FREQ = 2 * 1000 * 1000
 
-def load_file_in_chunks(path):
+async def load_file_in_chunks(path):
     gfile = Gio.File.new_for_path(path)
 
     try:
-        stream = gfile.read(None)
+        stream = await asyncio.to_thread(gfile.read, None)
     except GLib.Error:
         return
 
     while True:
-        bytes = stream.read_bytes(1024 * 1024, None)
+        bytes = await asyncio.to_thread(stream.read_bytes, 1024 * 1024, None)
         if bytes.get_size() == 0:
             break
 
         response = warp_pb2.RemoteMachineAvatar(avatar_chunk=bytes.get_data())
         yield response
 
-    stream.close()
+    await asyncio.to_thread(stream.close)
 
 def make_symbolic_link(op, path, target):
     tmppath = os.path.join(os.path.dirname(path), "%s-%d-%d.tmp" % (op.sender, op.start_time, GLib.get_monotonic_time()))
@@ -92,10 +99,10 @@ class FileSender(GObject.Object):
 
         self.error = None
 
-    def read_chunks(self):
+    async def read_chunks(self):
         for file in self.op.resolved_files:
             if self.cancellable.is_set():
-                return # StopIteration as different behaviors between 3.5 and 3.7, this works as well.
+                return
 
             logging.debug("get mtime: %lu.%u -- %s" % (file.mtime, file.mtime_usec, file.relative_path))
 
@@ -117,7 +124,7 @@ class FileSender(GObject.Object):
 
                 try:
                     gfile = Gio.File.new_for_uri(file.uri)
-                    stream = gfile.read(None)
+                    stream = await asyncio.to_thread(gfile.read, None)
 
                     file_done = False
                     first_chunk = True
@@ -129,7 +136,7 @@ class FileSender(GObject.Object):
                         if self.cancellable.is_set():
                             return
 
-                        b = stream.read_bytes(self.block_size, None)
+                        b = await asyncio.to_thread(stream.read_bytes, self.block_size, None)
 
                         last_size_read = b.get_size()
                         if last_size_read < self.block_size:
@@ -149,14 +156,14 @@ class FileSender(GObject.Object):
                                                  file_mode=file.file_mode,
                                                  time=time)
 
-                    stream.close()
+                    await asyncio.to_thread(stream.close)
                     continue
                 except Exception as e:
                     try:
                         # If we leave an io stream open, it locks the location.  For instance,
                         # if this was a mounted location, we wouldn't be able to terminate until
                         # we closed warp.
-                        stream.close()
+                        await asyncio.to_thread(stream.close)
                     except:
                         pass
 
@@ -185,6 +192,17 @@ class FileReceiver(GObject.Object):
         # a folder in some hierarchy that is not writable, we won't be able to create
         # anything inside it.
         self.folder_permission_change_list = []
+
+    def apply_landlock(self):
+        # Called once on the per-op worker thread before any writes. Landlock is
+        # per-thread and irreversible, so the asyncio loop thread (which also reads
+        # arbitrary source files for outgoing sends) must never have it applied.
+        if config.sandbox_mode != "landlock" or landlock is None:
+            return
+        logging.debug("FileReceiver: applying landlock to receive worker thread")
+        rs = landlock.Ruleset()
+        rs.allow(prefs.get_save_path())
+        rs.apply()
 
     def clean_existing_files(self):
         logging.debug("Removing any existing files matching the pending transfer")

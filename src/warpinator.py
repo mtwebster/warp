@@ -1,4 +1,5 @@
 #!/usr/bin/python3
+import asyncio
 import os
 import sys
 import setproctitle
@@ -1858,6 +1859,33 @@ class WarpApplication(Gtk.Application):
         self.window.toggle_visibility(time)
 
 
+def install_asyncio_glib_policy():
+    # PyGObject >= 3.50 ships gi.events.GLibEventLoopPolicy. On older PyGObject
+    # (Mint 22 / Ubuntu 24.04 LTS still ship 3.48), python3-gbulb provides the
+    # same integration. Once a target distro reaches PyGObject 3.50, gbulb can
+    # be dropped from debian/control.
+    try:
+        from gi.events import GLibEventLoopPolicy
+        asyncio.set_event_loop_policy(GLibEventLoopPolicy())
+        logging.info("asyncio: using gi.events.GLibEventLoopPolicy (PyGObject native)")
+        return
+    except ImportError:
+        pass
+
+    try:
+        import gbulb
+        gbulb.install(gtk=True)
+        logging.info("asyncio: using gbulb fallback (PyGObject < 3.50)")
+        return
+    except ImportError:
+        pass
+
+    logging.critical("asyncio: neither PyGObject 3.50+ nor python3-gbulb is available. "
+                     "Install the python3-gbulb package on Mint 22 / Ubuntu 24.04, "
+                     "or upgrade to PyGObject 3.50+.")
+    sys.exit(1)
+
+
 def main(testing=False):
     import signal
 
@@ -1865,6 +1893,8 @@ def main(testing=False):
         config.sandbox_mode = os.environ["WARPINATOR_SANDBOX_MODE"]
     except KeyError as e:
         pass
+
+    install_asyncio_glib_policy()
 
     try:
         w = WarpApplication(testing)

@@ -6,12 +6,10 @@ import math
 import logging
 import os
 from pathlib import Path
-import queue
 import sys
 import socket
 import time
 import traceback
-from concurrent.futures import ThreadPoolExecutor
 
 from gi.repository import GLib, Gtk, Gdk, GObject, GdkPixbuf, Gio
 
@@ -19,127 +17,7 @@ import prefs
 from networkmonitor import get_network_monitor
 import config
 
-try:
-    import landlock
-except Exception:
-    pass
-
 _ = gettext.gettext
-
-# Not sure what the ideal count is, too few and there will be waits if a lot of
-# transfers are happening.  The server runs on its own thread, and has its own thread
-# pool to service incoming rpcs. Each remote uses one thread for its connection loop,
-# and all remotes share this thread pool for outgoing calls. It could be we may need
-# to limit the number of simultaneous ops in the gui.
-#
-# Both server and remote thread pool sizes can be adjusted in dconf.
-global_rpc_threadpool = None
-
-LANDLOCK_METHODS = [
-    "start_transfer_op"
-]
-
-# Initializing in thie function avoids a circular import due to prefs.get_thread_count()
-def initialize_rpc_threadpool():
-    global global_rpc_threadpool
-
-    if config.sandbox_mode == "landlock":
-        logging.debug("Using NewThreadExecutor")
-        global_rpc_threadpool = NewThreadExecutor()
-    else:
-        logging.debug("Using ThreadPoolExecutor")
-        global_rpc_threadpool = ThreadPoolExecutor(max_workers=prefs.get_remote_pool_max_threads())
-
-class NewThreadExecutor():
-    def __init__(self):
-        self.max_workers = prefs.get_remote_pool_max_threads()
-        self.transfer_queue = queue.SimpleQueue()
-
-        self._threads = {}
-        self.count = 0
-        self._shutdown = False
-        self._wait_condition = threading.Condition()
-        self._thread_store_lock = threading.Lock()
-
-        self._factory_thread = threading.Thread(target=self.factory_thread_func, name="NewThreadExecutor-factory-thread")
-        self._factory_thread.start()
-
-    def factory_thread_func(self):
-        while True:
-            with self._wait_condition:
-                if self.transfer_queue.empty() and not self._shutdown:
-                    logging.debug("NewThreadExecutor: Waiting on an op")
-                    self._wait_condition.wait()
-
-            if self._shutdown:
-                logging.debug("NewThreadExecutor: Factory shutting down")
-                break
-
-            try:
-                opinfo = self.transfer_queue.get_nowait()
-                self.spawn_thread(opinfo)
-            except queue.Empty:
-                logging.debug("NewThreadExecutor: factory thread woke but nothing to do.")
-
-        logging.debug("NewThreadExecutor: Shutting down - waiting on workers")
-        while True:
-            with self._thread_store_lock:
-                if self.count == 0:
-                    break
-            logging.debug("sleep")
-            time.sleep(.1)
-        logging.debug("NewThreadExecutor: done waiting for workers, end factory thread")
-
-    def submit(self, func, *args, **kargs):
-        # self._shutdown will only ever be set to True once, no need to lock
-        if self._shutdown:
-            raise RuntimeError("Cannot start new transfer threads, shutting down.")
-
-        logging.debug("NewThreadExecutor: Adding op to queue (%s)" % func.__name__)
-        self.transfer_queue.put((func, args, kargs))
-
-        # Poke the factory thread.
-        with self._wait_condition:
-            logging.debug("NewThreadExecutor: Poking the factory.")
-            self._wait_condition.notify()
-
-    def spawn_thread(self, opinfo):
-        tname = "op-thread-%d" % GLib.get_monotonic_time()
-        t = threading.Thread(target=self._transfer_thread_func, name=tname, args=(opinfo,))
-
-        with self._thread_store_lock:
-            self.count += 1
-            self._threads[tname] = t
-            logging.debug("NewThreadExecutor: Starting thread for op: %s, thread count UP: %s" % (tname, self.count))
-        t.start()
-
-    def _transfer_thread_func(self, opinfo):
-        if opinfo[0].__name__ in LANDLOCK_METHODS:
-            logging.debug("NewThreadExecutor: Applying landlock to new op")
-            rs = landlock.Ruleset()
-            rs.allow(prefs.get_save_path())
-            rs.apply()
-
-        opinfo[0](*opinfo[1], **opinfo[2])
-
-        with self._thread_store_lock:
-            self.count -= 1
-            del self._threads[threading.current_thread().name]
-            logging.debug("NewThreadExecutor: Finished op call, thread count DOWN: %d" % self.count)
-        # Poke the factory thread in case there were ops waiting on an available thread.
-        with self._wait_condition:
-            self._wait_condition.notify()
-
-    def shutdown(self, wait=True):
-        logging.debug("NewThreadExecutor: Shutting down")
-        self._shutdown = True
-
-        with self._wait_condition:
-            self._wait_condition.notify()
-
-        logging.debug("NewThreadExecutor: Shutting down - waiting on factory thread")
-        self._factory_thread.join()
-        logging.debug("NewThreadExecutor: Shutdown complete")
 
 from enum import IntEnum, IntFlag
 TransferDirection = IntEnum('TransferDirection', 'TO_REMOTE_MACHINE \
