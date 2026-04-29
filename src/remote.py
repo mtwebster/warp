@@ -1,12 +1,12 @@
 #!/usr/bin/python3
 
 import asyncio
+import queue as queuemod
 import time
 import gettext
 import threading
 import logging
 import socket
-from concurrent.futures import ThreadPoolExecutor
 
 from gi.repository import GObject, GLib
 
@@ -480,13 +480,36 @@ class RemoteMachine(GObject.Object):
         receiver = transfers.FileReceiver(op)
         op.set_status(OpStatus.TRANSFERRING)
 
-        # Per-op single-worker executor: a fresh thread for this receive op,
-        # landlocked to the save path on first use, terminates with shutdown().
-        executor = ThreadPoolExecutor(
-            max_workers=1,
-            thread_name_prefix="recv-op-%d" % op.start_time,
-        )
         loop = asyncio.get_event_loop()
+
+        # Receive pipeline: the asyncio loop reads chunks off the gRPC stream
+        # and feeds them into a bounded thread-safe queue. A dedicated landlocked
+        # worker thread drains the queue and writes to disk. This restores the
+        # read/write overlap the threaded version had — the loop can pull the
+        # next chunk while the previous one is still being written, and only
+        # pays a cross-thread context switch when the queue is full (backpressure).
+        chunk_queue: queuemod.Queue = queuemod.Queue(maxsize=64)
+        worker_error: list = []
+
+        def writer_thread():
+            try:
+                receiver.apply_landlock()
+                receiver.clean_existing_files()
+                while True:
+                    chunk = chunk_queue.get()
+                    if chunk is None:
+                        break
+                    receiver.receive_data(chunk)
+                receiver.receive_finished()
+            except Exception as e:
+                worker_error.append(e)
+
+        worker = threading.Thread(
+            target=writer_thread,
+            name="recv-op-%d" % op.start_time,
+            daemon=False,
+        )
+        worker.start()
 
         op.file_iterator = self.stub.StartTransfer(
             warp_pb2.OpInfo(
@@ -497,10 +520,22 @@ class RemoteMachine(GObject.Object):
             )
         )
 
+        async def feed(data):
+            try:
+                chunk_queue.put_nowait(data)
+            except queuemod.Full:
+                # Worker is behind — apply backpressure without blocking the loop.
+                await loop.run_in_executor(None, chunk_queue.put, data)
+
+        async def drain_worker():
+            # Signal end-of-stream and wait for the worker to finish.
+            await loop.run_in_executor(None, chunk_queue.put, None)
+            await loop.run_in_executor(None, worker.join)
+
         async def report_receive_error(error):
             op.file_iterator = None
 
-            await loop.run_in_executor(executor, receiver.clean_current_top_dir_file)
+            await loop.run_in_executor(None, receiver.clean_current_top_dir_file)
 
             if error is None:
                 return
@@ -509,7 +544,7 @@ class RemoteMachine(GObject.Object):
 
             if receiver.current_stream is not None:
                 try:
-                    await loop.run_in_executor(executor, receiver.current_stream.close)
+                    await loop.run_in_executor(None, receiver.current_stream.close)
                 except GLib.Error:
                     pass
 
@@ -518,15 +553,14 @@ class RemoteMachine(GObject.Object):
             op.stop_transfer()
 
         try:
-            # Apply landlock once on the worker thread.
-            await loop.run_in_executor(executor, receiver.apply_landlock)
-            await loop.run_in_executor(executor, receiver.clean_existing_files)
-
             async for data in op.file_iterator:
-                await loop.run_in_executor(executor, receiver.receive_data, data)
+                await feed(data)
 
             op.file_iterator = None
-            await loop.run_in_executor(executor, receiver.receive_finished)
+            await drain_worker()
+
+            if worker_error:
+                raise worker_error[0]
 
             logging.debug("Remote: receipt of %s files (%s) finished in %s" %
                           (op.total_count, GLib.format_size(op.total_size),
@@ -539,11 +573,14 @@ class RemoteMachine(GObject.Object):
                     fatal=False)
             op.set_status(OpStatus.FINISHED)
         except grpc.aio.AioRpcError as e:
+            await drain_worker()
             if e.code() == grpc.StatusCode.CANCELLED:
                 await report_receive_error(None)
             else:
                 await report_receive_error(e)
         except ReceiveError as e:
+            if worker.is_alive():
+                await drain_worker()
             if e.fatal:
                 await report_receive_error(e)
             else:
@@ -551,9 +588,9 @@ class RemoteMachine(GObject.Object):
                 op.set_error(e)
                 op.set_status(OpStatus.FINISHED_WARNING)
         except Exception as e:
+            if worker.is_alive():
+                await drain_worker()
             await report_receive_error(e)
-        finally:
-            executor.shutdown(wait=True)
 
     async def stop_transfer_op(self, op, by_sender=False, lost_connection=False):
         logging.debug("Remote RPC: Calling StopTransfer on '%s'" % (self.display_hostname))

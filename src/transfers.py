@@ -3,8 +3,10 @@
 import asyncio
 import os
 import logging
+import queue as queuemod
 import stat
 import shutil
+import threading
 import gettext
 from pathlib import Path
 
@@ -100,77 +102,104 @@ class FileSender(GObject.Object):
         self.error = None
 
     async def read_chunks(self):
-        for file in self.op.resolved_files:
-            if self.cancellable.is_set():
-                return
+        # The asyncio loop drives gRPC's send side via this async generator.
+        # File reads happen on a dedicated reader thread that pushes ready
+        # FileChunk messages into a bounded queue; the generator pulls with
+        # get_nowait when chunks are immediately available (no cross-thread
+        # round-trip per chunk) and only falls back to run_in_executor when
+        # the queue is empty (reader can't keep up). This restores the
+        # read-while-yielding pipeline parallelism the threaded version had.
+        loop = asyncio.get_event_loop()
+        chunk_queue: queuemod.Queue = queuemod.Queue(maxsize=64)
+        EOF = object()
+        op = self.op
 
-            logging.debug("get mtime: %lu.%u -- %s" % (file.mtime, file.mtime_usec, file.relative_path))
+        def reader_thread():
+            try:
+                for file in op.resolved_files:
+                    if self.cancellable.is_set():
+                        return
 
-            ftime = warp_pb2.FileTime(mtime=file.mtime,
-                                      mtime_usec = file.mtime_usec)
-            if file.file_type == FileType.DIRECTORY:
-                yield warp_pb2.FileChunk(relative_path=file.relative_path,
-                                         file_type=file.file_type,
-                                         file_mode=file.file_mode,
-                                         time=ftime)
-            elif file.file_type == FileType.SYMBOLIC_LINK:
-                yield warp_pb2.FileChunk(relative_path=file.relative_path,
-                                         file_type=file.file_type,
-                                         symlink_target=file.symlink_target,
-                                         file_mode=file.file_mode,
-                                         time=ftime)
-            else:
-                stream = None
+                    logging.debug("get mtime: %lu.%u -- %s" % (file.mtime, file.mtime_usec, file.relative_path))
 
-                try:
-                    gfile = Gio.File.new_for_uri(file.uri)
-                    stream = await asyncio.to_thread(gfile.read, None)
+                    ftime = warp_pb2.FileTime(mtime=file.mtime, mtime_usec=file.mtime_usec)
+                    if file.file_type == FileType.DIRECTORY:
+                        chunk_queue.put(warp_pb2.FileChunk(
+                            relative_path=file.relative_path,
+                            file_type=file.file_type,
+                            file_mode=file.file_mode,
+                            time=ftime))
+                        continue
 
-                    file_done = False
-                    first_chunk = True
+                    if file.file_type == FileType.SYMBOLIC_LINK:
+                        chunk_queue.put(warp_pb2.FileChunk(
+                            relative_path=file.relative_path,
+                            file_type=file.file_type,
+                            symlink_target=file.symlink_target,
+                            file_mode=file.file_mode,
+                            time=ftime))
+                        continue
 
-                    while True:
-                        if file_done:
-                            break
-
-                        if self.cancellable.is_set():
-                            return
-
-                        b = await asyncio.to_thread(stream.read_bytes, self.block_size, None)
-
-                        last_size_read = b.get_size()
-                        if last_size_read < self.block_size:
-                            file_done = True
-
-                        self.op.progress_tracker.update_progress(last_size_read)
-
-                        if first_chunk:
-                            time = ftime
-                            first_chunk = False
-                        else:
-                            time = None
-
-                        yield warp_pb2.FileChunk(relative_path=file.relative_path,
-                                                 file_type=file.file_type,
-                                                 chunk=b.get_data(),
-                                                 file_mode=file.file_mode,
-                                                 time=time)
-
-                    await asyncio.to_thread(stream.close)
-                    continue
-                except Exception as e:
+                    stream = None
                     try:
-                        # If we leave an io stream open, it locks the location.  For instance,
-                        # if this was a mounted location, we wouldn't be able to terminate until
-                        # we closed warp.
-                        await asyncio.to_thread(stream.close)
-                    except:
-                        pass
+                        gfile = Gio.File.new_for_uri(file.uri)
+                        stream = gfile.read(None)
 
-                    self.error = e
+                        first_chunk = True
+                        while True:
+                            if self.cancellable.is_set():
+                                return
+
+                            b = stream.read_bytes(self.block_size, None)
+                            last_size_read = b.get_size()
+                            file_done = last_size_read < self.block_size
+
+                            op.progress_tracker.update_progress(last_size_read)
+
+                            time = ftime if first_chunk else None
+                            first_chunk = False
+
+                            chunk_queue.put(warp_pb2.FileChunk(
+                                relative_path=file.relative_path,
+                                file_type=file.file_type,
+                                chunk=b.get_data(),
+                                file_mode=file.file_mode,
+                                time=time))
+
+                            if file_done:
+                                break
+
+                        stream.close()
+                    except Exception as e:
+                        try:
+                            stream.close()
+                        except Exception:
+                            pass
+                        self.error = e
+                        return
+
+                op.progress_tracker.finished()
+            finally:
+                chunk_queue.put(EOF)
+
+        worker = threading.Thread(
+            target=reader_thread,
+            name="send-reader-%d" % self.timestamp,
+            daemon=False,
+        )
+        worker.start()
+
+        try:
+            while True:
+                try:
+                    item = chunk_queue.get_nowait()
+                except queuemod.Empty:
+                    item = await loop.run_in_executor(None, chunk_queue.get)
+                if item is EOF:
                     return
-
-        self.op.progress_tracker.finished()
+                yield item
+        finally:
+            await loop.run_in_executor(None, worker.join)
 
 class FileReceiver(GObject.Object):
     def __init__(self, op):
